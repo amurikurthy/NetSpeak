@@ -103,6 +103,7 @@ async function appView() {
   root.replaceChildren(
     h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, 'netspeak'),
       S.me.role === 'admin' && h('button', { class: 'ghost', onclick: () => { location.hash = '#admin'; } }, 'Admin'),
+      h('button', { class: 'ghost', onclick: pocketLock }, '🔒 Pocket lock'),
       h('button', { class: 'ghost', onclick: settings }, '⚙ Settings')),
     h('div', { class: 'wrap' }, ui.warn, h('h2', {}, 'Rooms'), ui.rooms, h('h2', {}, 'Program feeds'), ui.feeds),
     h('div', { class: 'bar' }, h('div', { class: 'in' },
@@ -418,11 +419,33 @@ function updateMediaSession() {
   on('nexttrack', () => { const t = S.rooms.filter((r) => S.joined.has(r.id)); if (t.length) { S.active = t[(t.findIndex((r) => r.id === S.active) + 1) % t.length].id; toast('Active room: ' + t.find((r) => r.id === S.active).name); } });
   try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
 }
+let pocket = false;
 async function setWake() {
   try {
-    if (prefs.wake && document.visibilityState === 'visible' && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
-    else if (!prefs.wake && wakeLock) { await wakeLock.release(); wakeLock = null; }
+    const want = prefs.wake || pocket;
+    if (want && document.visibilityState === 'visible' && 'wakeLock' in navigator) {
+      if (wakeLock && !wakeLock.released) return;
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { if (document.visibilityState === 'visible') setWake(); });
+    } else if (!want && wakeLock) { await wakeLock.release(); wakeLock = null; }
   } catch {}
+}
+
+// Black full-screen overlay: screen stays awake, OLED draws almost nothing, touches are ignored
+// until a deliberate 1.5 s press-and-hold. Audio, talking and call mode keep running underneath.
+function pocketLock() {
+  if (pocket) return;
+  pocket = true; setWake();
+  if (!('wakeLock' in navigator)) toast('This browser cannot keep the screen awake; the lock still blocks touches.');
+  const bar = h('i', { style: 'display:block;height:4px;width:0;background:#4ade80;border-radius:2px;transition:width 1.5s linear' });
+  const o = h('div', { style: 'position:fixed;inset:0;background:#000;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#444;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none' },
+    h('div', {}, 'Locked · hold to unlock'), h('div', { style: 'width:160px;margin-top:14px' }, bar));
+  let t = null;
+  const stop = () => { clearTimeout(t); bar.style.transition = 'none'; bar.style.width = '0'; };
+  o.addEventListener('pointerdown', (e) => { e.preventDefault(); bar.style.transition = 'width 1.5s linear'; bar.style.width = '100%'; t = setTimeout(() => { o.remove(); pocket = false; setWake(); }, 1500); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) o.addEventListener(ev, stop);
+  o.addEventListener('contextmenu', (e) => e.preventDefault());
+  document.body.append(o);
 }
 
 window.netspeak = { engine, S, prefs };
