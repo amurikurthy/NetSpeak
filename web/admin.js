@@ -142,9 +142,9 @@ function feedForm(f) {
 }
 function ingestInfo(f) {
   const url = `${location.origin}/ingest/${f.ingestKey}`;
-  const cmd = `ffmpeg -re -i INPUT -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - | curl -sS -T - ${url}`;
-  const cmd2 = `ffmpeg -f pulse -i default -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - | curl -sS -T - ${url}`;
-  sheet(`Ingest: ${f.name}`, h('div', {}, h('p', { class: 'sub' }, 'Opus packets are relayed untouched: no re-encoding on the server. Keep this URL secret.'),
+  const cmd = `ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=250,alimiter=limit=0.8" -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - | curl -sS -T - ${url}`;
+  const cmd2 = `ffmpeg -f pulse -i default -af "acompressor=threshold=0.063:ratio=3:attack=10:release=250,alimiter=limit=0.8" -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - | curl -sS -T - ${url}`;
+  sheet(`Ingest: ${f.name}`, h('div', {}, h('p', { class: 'sub' }, 'Opus packets are relayed untouched: no re-encoding on the server. The compressor and limiter run in ffmpeg (the -af part), matching what the browser sender does. Keep this URL secret.'),
     h('label', { class: 'f' }, 'Ingest URL (PUT/POST an Ogg/Opus stream)'), h('pre', {}, url),
     h('label', { class: 'f' }, 'From a file / any source'), h('pre', {}, cmd), h('label', { class: 'f' }, 'From a sound card (Linux example)'), h('pre', {}, cmd2),
     h('button', { class: 'danger', style: 'margin-top:12px', onclick: () => { if (confirm('Rotate the key? The old URL stops working.')) act(() => api('POST', `/api/admin/feeds/${f.id}/rotate`), 'Key rotated'); } }, 'Rotate key')), null);

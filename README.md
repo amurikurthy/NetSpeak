@@ -3,7 +3,7 @@
 Self-hosted intercom with clean program feeds. One container, one port (**443**), no database.
 
 - **Rooms** with per-room push-to-talk or latch, live "who's talking", per-room volume
-- **Program feeds**: unprocessed stereo Opus (up to 256 kbps), separate volume, auto-dims while people talk
+- **Program feeds**: stereo Opus at 192 kbps with a compressor and limiter at the sending end, so levels stay even and never clip. Listeners just get a volume slider
 - **Permissions**: users created by the admin, assigned straight to rooms and feeds with *listen / talk / send*. Changes apply instantly to connected clients
 - **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
 - **Feedback protection**: an automatic suppressor finds howling tones on your mic and cuts just that frequency, so you can still hear everyone while you talk (and talk over each other). Earbuds remain the real cure for two devices in one room
@@ -84,14 +84,14 @@ To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks 
 
 **Admin → Users/Rooms/Feeds.** The admin creates a user account for each person and ticks which rooms and feeds they can listen to, talk in or send to (or sets a room to "Everyone"). Admins can access everything.
 
-**Program audio.** Either open a feed on a device with a line-in/interface and choose *Send from this device* (echo cancel, noise suppression and AGC are forced off, stereo Opus 192 kbps by default), or push from anything ffmpeg can read. Packets are relayed as-is, never re-encoded:
+**Program audio.** Either open a feed on a device with a line-in/interface and choose *Send from this device* (echo cancel, noise suppression and AGC are off; a compressor and limiter even out the level, and a send-level slider sets how hot it goes out), or push from anything ffmpeg can read. The server relays Opus packets as-is and never re-encodes them, so any compressing happens at the sender; the ffmpeg line below does it with `-af`:
 
 ```bash
-ffmpeg -re -i INPUT -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - \
+ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=250,alimiter=limit=0.8" -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - \
   | curl -sS -T - https://HOST/ingest/FEED_KEY
 ```
 
-(The key is shown in Admin → Feeds → Ingest.) Use 20 ms frames. Opus is lossy even at 256 kbps; it is transparent for broadcast monitoring but is not bit-exact PCM.
+(The key is shown in Admin → Feeds → Ingest.) Use 20 ms frames. Opus is lossy, but at 192 kbps it is transparent for monitoring; it is not bit-exact PCM.
 
 ## Browser support and the screen-off caveat
 

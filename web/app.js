@@ -26,8 +26,8 @@ export async function api(method, url, body) {
 }
 
 // ---------- prefs ----------
-const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, duck: 0.4, wake: false, micOpen: false,
-  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, joinAll: false, feedback: true, autoFeeds: true, left: [], feedsOff: [], seeded: false, ver: 2 };
+const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, wake: false, micOpen: false,
+  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedGain: 1, feedback: true, left: [], feedsOff: [], seeded: false, ver: 2 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
 if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
@@ -81,7 +81,7 @@ async function appView() {
   ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);
   const mv = h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; savePrefs(); voice?.setGain(prefs.micGain); } });
   const lv = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
-  engine.vol.master = prefs.master; engine.duck = prefs.duck; engine.jitter.feed = prefs.feedBuf;
+  engine.vol.master = prefs.master;
   root.replaceChildren(
     h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, 'NetSpeak'),
       S.me.role === 'admin' && h('button', { class: 'ghost', onclick: () => { location.hash = '#admin'; } }, 'Admin'),
@@ -142,11 +142,10 @@ function onMsg(m) {
       const ids = new Set(rooms.map((r) => r.id)), fids = new Set(feeds.map((f) => f.id));
       // Rooms: remembered ones, plus (by default) every room this user can hear except those they left on purpose.
       for (const id of prefs.joined) if (ids.has(id)) S.joined.add(id);
-      if (prefs.joinAll) { for (const id of ids) if (!prefs.left.includes(id)) S.joined.add(id); }
-      else if (!prefs.seeded && rooms.length) { S.joined.add((rooms.find((r) => r.talk) || rooms[0]).id); prefs.seeded = true; }   // first visit: just one room
+      if (!prefs.seeded && rooms.length) { S.joined.add((rooms.find((r) => r.talk) || rooms[0]).id); prefs.seeded = true; }   // first visit: just one room
       for (const id of [...S.joined]) { if (ids.has(id)) send({ t: 'join', room: id }); else S.joined.delete(id); }
       for (const id of prefs.listening) if (fids.has(id)) S.listening.add(id);
-      if (prefs.autoFeeds) for (const f of feeds) if (f.listen && !prefs.feedsOff.includes(f.id)) S.listening.add(f.id);
+      for (const f of feeds) if (f.listen && !prefs.feedsOff.includes(f.id)) S.listening.add(f.id);
       for (const id of [...S.listening]) { if (fids.has(id)) send({ t: 'listen', feed: id, on: true }); else S.listening.delete(id); }
       // Drop anything that was deleted or lost its permission while we were using it.
       for (const id of [...S.talking]) { const r = rooms.find((x) => x.id === id); if (!r || !r.talk || !S.joined.has(id)) talkStop(id); }
@@ -299,7 +298,7 @@ async function talkStart(id) {
   S.talking.add(id); S.active = id; update();
   const v = await ensureMic();
   if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
-  engine.talkingNow = true; v.sending = true; S.active = id; applyGate();
+  v.sending = true; S.active = id; applyGate();
   const tx0 = engine.stats.tx;
   setTimeout(() => { if (S.talking.has(id) && engine.stats.tx === tx0) toast('Mic is open but no sound is being sent: speak up, or lower the noise gate / pick "Headset" in Settings'); }, 2500);
   send({ t: 'talk', room: id, on: true });
@@ -310,7 +309,7 @@ function talkStop(id) {
   update(); releaseMic();
 }
 function applyGate() { voice?.setGate((PRESETS[prefs.preset] || PRESETS.phone).gate || S.calls.size > 0, prefs.gateDb); }
-function stopSending() { engine.talkingNow = false; if (voice) voice.sending = false; releaseMic(); }
+function stopSending() { if (voice) voice.sending = false; releaseMic(); }
 
 // ----- feeds -----
 function feedCard(f) {
@@ -323,16 +322,19 @@ function feedCard(f) {
     persist(); update();
   } });
   const src = f.source ? h('button', { onclick: () => publishDialog(f) }, 'Send from this device') : null;
+  const lvl = f.source ? h('div', { hidden: true }, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Send level'),
+    h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.feedGain, oninput: (e) => { prefs.feedGain = +e.target.value; savePrefs(); engine.captures.get('feed')?.setGain(prefs.feedGain); } })) : null;
   const el = h('section', { class: 'card' },
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name), h('div', { class: 'sub' }, f.description || 'Clean program audio, no processing')),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name), h('div', { class: 'sub' }, f.description || 'Program audio')),
       live), h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol,
-    h('div', { class: 'row', style: 'margin-top:10px' }, play, src, n));
+    lvl, h('div', { class: 'row', style: 'margin-top:10px' }, play, src, n));
   cards.set('f' + f.id, () => {
     const p = S.presence.feeds?.[f.id] || {};
     live.textContent = p.live ? '● LIVE' : 'OFFLINE'; live.classList.toggle('live', !!p.live);
     n.textContent = `${p.n || 0} listening`;
     const on = S.listening.has(f.id);
     play.textContent = on ? '■ Stop listening' : '▶ Listen';
+    if (lvl) lvl.hidden = S.publishing !== f.id;
     if (src) { src.textContent = S.publishing === f.id ? '■ Stop sending' : 'Send from this device'; src.classList.toggle('danger', S.publishing === f.id); }
   });
   if (S.listening.has(f.id)) setTimeout(() => applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1), 0);
@@ -345,23 +347,22 @@ async function publishDialog(f) {
   try { const t = await navigator.mediaDevices.getUserMedia({ audio: true }); t.getTracks().forEach((x) => x.stop()); devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput'); }
   catch (e) { return toast('Audio input unavailable: ' + e.message); }
   const sel = h('select', {}, devs.map((d) => h('option', { value: d.deviceId }, d.label || 'Input')));
-  const br = h('select', {}, [['128000', '128 kbps'], ['192000', '192 kbps (recommended)'], ['256000', '256 kbps']].map(([v, l]) => h('option', { value: v, selected: v === '192000' }, l)));
   const close = () => sheet.remove();
   const sheet = h('div', { class: 'sheet', onclick: (e) => { if (e.target === sheet) close(); } }, h('div', {},
     h('h3', {}, `Send to “${f.name}”`),
-    h('p', { class: 'sub' }, 'Captured as stereo with echo cancellation, noise suppression and auto gain all OFF, so the audio goes out exactly as your interface delivers it. Use a line-in or audio interface, not a phone mic.'),
-    h('label', { class: 'f' }, 'Input'), sel, h('label', { class: 'f' }, 'Opus bitrate'), br,
+    h('p', { class: 'sub' }, 'Sent as stereo at high quality with echo cancellation, noise suppression and auto gain OFF. A compressor and limiter even out the level and stop peaks clipping. Use a line-in or audio interface, not a phone mic. You can adjust the send level while live.'),
+    h('label', { class: 'f' }, 'Input'), sel,
     h('div', { class: 'row', style: 'margin-top:16px' }, h('button', { class: 'primary', onclick: async () => {
-      close(); await startPublish(f, sel.value, +br.value);
+      close(); await startPublish(f, sel.value);
     } }, 'Start sending'), h('button', { onclick: close }, 'Cancel'))));
   document.body.append(sheet);
 }
-async function startPublish(f, deviceId, bitrate) {
+async function startPublish(f, deviceId) {
   try {
     await engine.start(); engine.resume();
     send({ t: 'publish', feed: f.id, on: true });
     const ch = f.ch;
-    const cap = await engine.capture('feed', { channels: 2, bitrate, application: 'audio', deviceId, gain: 1, ec: false, ns: false, agc: false, hpf: 0, gate: false,
+    const cap = await engine.capture('feed', { channels: 2, bitrate: 192000, application: 'audio', deviceId, gain: prefs.feedGain, ec: false, ns: false, agc: false, hpf: 0, gate: false, compressor: true,
       onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
       onFrame: (seq, d) => { if (!ws || ws.readyState !== 1) return; const m = new Uint8Array(7 + d.length), dv = new DataView(m.buffer); dv.setUint8(0, 1); dv.setUint16(1, ch); dv.setUint32(3, seq); m.set(d, 7); ws.send(m); } });
     cap.sending = true; S.publishing = f.id; update();
@@ -385,8 +386,6 @@ async function settings() {
   const mic = h('select', { onchange: (e) => { prefs.micId = e.target.value; savePrefs(); reopenMic(); } }, h('option', { value: '' }, 'System default'), ins.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.micId)));
   const spk = h('select', { onchange: (e) => { prefs.spkId = e.target.value; savePrefs(); engine.setSink(prefs.spkId); } }, h('option', { value: '' }, 'System default'), outs.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.spkId)));
   const gate = h('input', { type: 'range', min: -75, max: -25, step: 1, value: prefs.gateDb, oninput: (e) => { prefs.gateDb = +e.target.value; savePrefs(); voice?.setGate(PRESETS[prefs.preset].gate, prefs.gateDb); } });
-  const duck = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: prefs.duck, oninput: (e) => { prefs.duck = +e.target.value; engine.duck = prefs.duck; savePrefs(); } });
-  const buf = h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: prefs.feedBuf, oninput: (e) => { prefs.feedBuf = +e.target.value; engine.jitter.feed = prefs.feedBuf; savePrefs(); } });
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
   const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
   const testBtn = h('button', { onclick: async () => { if (!await ensureMic()) return; testBtn.textContent = 'Mic open: speak and watch the meter'; releaseMic(); } }, 'Test microphone');
@@ -417,10 +416,6 @@ async function settings() {
     chk('Keep microphone open between talks (faster push-to-talk)', 'micOpen', () => { micOpenChanged(); }),
     h('h2', {}, 'Listening'),
     outs.length && h('div', {}, h('label', { class: 'f' }, 'Output device'), spk),
-    h('label', { class: 'f' }, 'Lower program while people talk'), duck,
-    h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
-    chk('Listen to ALL my rooms at once (every room is heard mixed together)', 'joinAll', () => { if (prefs.joinAll && S.connected) { prefs.left = []; ws.close(); } }),
-    chk('Listen to program feeds automatically', 'autoFeeds', () => { if (prefs.autoFeeds && S.connected) { prefs.feedsOff = []; ws.close(); } }),
     chk('Automatic feedback protection (cuts howling tones on your mic; you can still hear everyone while you talk)', 'feedback', () => { voice?.setFeedback(prefs.feedback); }),
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles talk (latched) in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),

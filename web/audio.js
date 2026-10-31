@@ -15,9 +15,7 @@ export class Engine {
     this.chans = new Map();    // ch -> {kind:'room'|'feed', id}
     this.gains = new Map();    // "room:id"/"feed:id" -> GainNode
     this.vol = { master: 1, mic: 1 };
-    this.jitter = { room: 0.08, feed: 0.25 };
-    this.duck = 0.4;           // program level while comms are active (1 = no ducking)
-    this.lastComms = 0;
+    this.jitter = { room: 0.08, feed: 0.1 };   // fixed playout buffers (seconds)
     this.onLevel = () => {};
     this.sendFrame = () => {};
     this.captures = new Map(); // name -> Capture
@@ -51,7 +49,6 @@ export class Engine {
     await ctx.audioWorklet.addModule('/worklet.js');
     this.master.gain.value = this.vol.master;
     setInterval(() => this.housekeeping(), 1000);
-    setInterval(() => this.duckTick(), 100);
   }
 
   // Starts playback if the browser allows it. Without a user gesture (and outside an installed app)
@@ -107,7 +104,6 @@ export class Engine {
     let v = this.voices.get(key);
     if (!v) { v = this.makeVoice(ref); this.voices.set(key, v); }
     v.last = performance.now();
-    if (ref.kind === 'room') this.lastComms = v.last;
     try {
       v.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: seq * 20000, data: new Uint8Array(buf, 9) }));
     } catch (e) { /* decoder closed; recreated on next frame */ this.voices.delete(key); }
@@ -156,13 +152,6 @@ export class Engine {
     }
   }
 
-  duckTick() {
-    if (!this.ctx) return;
-    const active = performance.now() - this.lastComms < 600 || this.talkingNow;
-    const target = active ? this.duck : 1;
-    this.program.gain.setTargetAtTime(target, this.ctx.currentTime, active ? 0.05 : 0.5);
-  }
-
   // ---- capture ----
   async capture(name, opts) {
     await this.start();
@@ -183,7 +172,7 @@ class Capture {
   constructor(engine, o) {
     this.e = engine;
     this.o = Object.assign({ channels: 1, bitrate: 32000, application: 'voip', deviceId: '', gain: 1,
-      ec: true, ns: true, agc: true, hpf: 0, gate: false, gateDb: -55, feedback: false, onFeedback: () => {}, onFrame: () => {}, onLevel: () => {} }, o);
+      ec: true, ns: true, agc: true, hpf: 0, gate: false, gateDb: -55, feedback: false, compressor: false, onFeedback: () => {}, onFrame: () => {}, onLevel: () => {} }, o);
     this.seq = 0; this.ts = 0; this.sending = false;
   }
 
@@ -206,11 +195,22 @@ class Capture {
     this.gain = ctx.createGain();
     this.gain.gain.value = o.gain;
     tail.connect(this.gain);
+    tail = this.gain;
+    if (o.compressor) {
+      // Program audio: gentle compressor to even out loud and quiet parts, then a fast limiter so peaks never clip.
+      this.comp = ctx.createDynamicsCompressor();
+      this.comp.threshold.value = -24; this.comp.knee.value = 12; this.comp.ratio.value = 3;
+      this.comp.attack.value = 0.01; this.comp.release.value = 0.25;
+      this.lim = ctx.createDynamicsCompressor();
+      this.lim.threshold.value = -2; this.lim.knee.value = 0; this.lim.ratio.value = 20;
+      this.lim.attack.value = 0.001; this.lim.release.value = 0.1;
+      tail.connect(this.comp); this.comp.connect(this.lim); tail = this.lim;
+    }
     this.node = new AudioWorkletNode(ctx, 'ns-framer', {
       numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [o.channels],
       processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb, feedback: o.feedback },
     });
-    this.gain.connect(this.node);
+    tail.connect(this.node);
     this.sink = ctx.createGain(); this.sink.gain.value = 0;   // keeps the graph pulled, outputs silence
     this.node.connect(this.sink); this.sink.connect(ctx.destination);
     this.enc = new AudioEncoder({
