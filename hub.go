@@ -422,7 +422,8 @@ func (h *Hub) route(c *Client, data []byte) {
 	m := outMsg{websocket.BinaryMessage, out}
 	h.mu.RLock()
 	for o := range h.clients {
-		if o == c {
+		// Never send someone their own voice, even to another device signed in as them (feedback loop).
+		if o == c || o.userID == c.userID {
 			continue
 		}
 		o.mu.RLock()

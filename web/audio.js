@@ -92,7 +92,7 @@ export class Engine {
     if (!this.ctx) return;
     const g = this.gainFor(kind, id);
     g._v = v; g._muted = muted;
-    g.gain.value = muted ? 0 : v;
+    g.gain.setTargetAtTime(muted ? 0 : v, this.ctx.currentTime, 0.02);   // short ramp: no clicks
   }
 
   // ---- receive ----

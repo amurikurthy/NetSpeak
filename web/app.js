@@ -27,7 +27,7 @@ export async function api(method, url, body) {
 
 // ---------- prefs ----------
 const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, duck: 0.4, wake: false, micOpen: false,
-  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, joinAll: false, autoFeeds: true, left: [], feedsOff: [], seeded: false, ver: 2 };
+  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, joinAll: false, halfDuplex: true, autoFeeds: true, left: [], feedsOff: [], seeded: false, ver: 2 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
 if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
@@ -187,7 +187,7 @@ function audioBanner() { if (ui.audio) ui.audio.hidden = !audioNeeded(); }
 async function enableAudio() {
   try {
     await engine.start(); await engine.resume();
-    for (const id of S.joined) applyVol('room', id, prefs.roomVol[id] ?? 1);
+    for (const id of S.joined) applyRoom(id);
     for (const id of S.listening) applyVol('feed', id, prefs.feedVol[id] ?? 1);
   } catch (e) { toast('Could not start audio: ' + e.message); }
   audioBanner();
@@ -201,49 +201,54 @@ function persist() { prefs.joined = [...S.joined]; prefs.listening = [...S.liste
 function roomCard(r) {
   const chips = h('div', { class: 'chips' });
   const vol = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
-    oninput: (e) => { prefs.roomVol[r.id] = +e.target.value; savePrefs(); applyVol('room', r.id, prefs.roomVol[r.id]); } });
+    oninput: (e) => { prefs.roomVol[r.id] = +e.target.value; savePrefs(); applyRoom(r.id); } });
   const sw = h('input', { type: 'checkbox', onchange: async (e) => {
-    if (e.target.checked) { prefs.left = prefs.left.filter((x) => x !== r.id); S.joined.add(r.id); send({ t: 'join', room: r.id }); await engine.start(); applyVol('room', r.id, prefs.roomVol[r.id] ?? 1); }
+    if (e.target.checked) { prefs.left = prefs.left.filter((x) => x !== r.id); S.joined.add(r.id); send({ t: 'join', room: r.id }); await engine.start(); applyRoom(r.id); }
     else { if (!prefs.left.includes(r.id)) prefs.left.push(r.id); if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); }
     persist(); update();
   } });
   const btn = r.talk ? talkButton(r) : null;
-  const call = r.talk ? h('button', { style: 'width:100%;margin-top:8px', onclick: () => toggleCall(r.id) }) : null;
   const el = h('section', { class: 'card room', style: `--c:${r.color}` },
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), h('div', { class: 'sub' }, r.talk ? 'Listen & talk' : 'Listen only')),
       h('label', { class: 'sw' }, sw, h('i'))),
-    chips, h('div', { class: 'sub' }, 'Room volume'), vol, btn, call);
+    chips, h('div', { class: 'sub' }, 'Room volume'), vol, btn);
   cards.set(r.id, () => {
     const on = S.joined.has(r.id);
     sw.checked = on; el.classList.toggle('joined', on);
     const ms = S.presence.rooms?.[r.id] || [];
     chips.replaceChildren(...(on ? ms.map((m) => h('span', { class: 'chip' + (m.t ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, `${ms.length} in room`)]));
-    if (call) { call.hidden = !on; const c = S.calls.has(r.id); call.textContent = c ? '📞 In call: tap to hang up' : '📞 Hands-free call mode'; call.classList.toggle('primary', c); }
     if (btn) { btn.hidden = !on; btn.classList.toggle('on', S.talking.has(r.id)); btn._label(); }
   });
-  if (S.joined.has(r.id)) setTimeout(() => applyVol('room', r.id, prefs.roomVol[r.id] ?? 1), 0);
+  if (S.joined.has(r.id)) setTimeout(() => applyRoom(r.id), 0);
   return el;
 }
 
+// Volume for a room, with the room I'm transmitting in muted so my speaker can't feed back into my mic.
+function applyRoom(id) { applyVol('room', id, prefs.halfDuplex && S.talking.has(id) ? 0 : (prefs.roomVol[id] ?? 1)); }
+function applyDuplex() { for (const r of S.rooms) applyRoom(r.id); }
 function applyVol(kind, id, v) { if (engine.ctx) engine.setVolume(kind, id, v); }
 
 function talkButton(r) {
   const b = h('button', { class: 'talk-btn', oncontextmenu: (e) => e.preventDefault() });
-  let downAt = 0, latched = false;
-  b._label = () => { const on = S.talking.has(r.id); b.replaceChildren(on ? (latched ? 'TALKING' : 'TALKING') : 'HOLD TO TALK',
-    h('small', {}, on ? (latched ? 'tap to stop' : 'release to stop') : (r.pttOnly ? 'push-to-talk only' : 'tap to latch'))); };
+  let downAt = 0;
+  b._label = () => {
+    const on = S.talking.has(r.id), latched = S.calls.has(r.id);
+    b.replaceChildren(on ? 'TALKING' : (r.pttOnly ? 'HOLD TO TALK' : 'TAP OR HOLD TO TALK'),
+      h('small', {}, on ? (latched ? 'tap to stop' : 'release to stop') : (r.pttOnly ? 'push-to-talk only' : 'tap to latch · hold for push-to-talk')));
+  };
   b.addEventListener('pointerdown', async (e) => {
     e.preventDefault(); b.setPointerCapture(e.pointerId);
-    if (S.talking.has(r.id)) { latched = false; return talkStop(r.id); }
-    downAt = Date.now(); latched = false; await talkStart(r.id);
+    if (S.talking.has(r.id)) return talkStop(r.id);   // tap while latched: stop
+    downAt = Date.now(); await talkStart(r.id);
   });
   const up = () => {
     if (!S.talking.has(r.id) || !downAt) return;
     const held = Date.now() - downAt; downAt = 0;
-    if (held < 350 && !r.pttOnly) { latched = true; b._label(); } else talkStop(r.id);
+    if (held < 350 && !r.pttOnly) { S.calls.add(r.id); b._label(); update(); } else talkStop(r.id);   // quick tap latches
   };
-  b.addEventListener('pointerup', up); b.addEventListener('pointercancel', () => { downAt = 0; if (!latched) talkStop(r.id); });
-  b.addEventListener('keydown', (e) => { if (e.code === 'Space' && !e.repeat) { e.preventDefault(); S.talking.has(r.id) ? talkStop(r.id) : talkStart(r.id); } });
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointercancel', () => { downAt = 0; if (!S.calls.has(r.id)) talkStop(r.id); });
+  b.addEventListener('keydown', (e) => { if (e.code === 'Space' && !e.repeat) { e.preventDefault(); S.talking.has(r.id) ? talkStop(r.id) : toggleCall(r.id); } });
   return b;
 }
 
@@ -251,7 +256,7 @@ function toggleCall(id) {
   if (S.calls.has(id)) return talkStop(id);
   S.calls.add(id); S.active = id; talkStart(id);
 }
-// Earbud / headset button: toggles hands-free talk in the active room.
+// Earbud / headset button: toggles latched talk in the active room.
 function earbudToggle() {
   const talkable = S.rooms.filter((r) => r.talk && S.joined.has(r.id));
   const id = (S.active && talkable.find((r) => r.id === S.active)?.id) || talkable[0]?.id;
@@ -290,7 +295,8 @@ function releaseMic() {
 }
 async function talkStart(id) {
   await engine.start(); engine.resume();
-  S.talking.add(id); update();
+  for (const o of [...S.talking]) if (o !== id) talkStop(o);   // only ever transmit to one room
+  S.talking.add(id); S.active = id; applyDuplex(); update();
   const v = await ensureMic();
   if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
   engine.talkingNow = true; v.sending = true; S.active = id; applyGate();
@@ -299,7 +305,7 @@ async function talkStart(id) {
   send({ t: 'talk', room: id, on: true });
 }
 function talkStop(id) {
-  S.talking.delete(id); S.calls.delete(id); applyGate(); send({ t: 'talk', room: id, on: false });
+  S.talking.delete(id); S.calls.delete(id); applyGate(); applyDuplex(); send({ t: 'talk', room: id, on: false });
   if (!S.talking.size) stopSending();
   update(); releaseMic();
 }
@@ -414,8 +420,9 @@ async function settings() {
     h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
     chk('Listen to ALL my rooms at once (every room is heard mixed together)', 'joinAll', () => { if (prefs.joinAll && S.connected) { prefs.left = []; ws.close(); } }),
     chk('Listen to program feeds automatically', 'autoFeeds', () => { if (prefs.autoFeeds && S.connected) { prefs.feedsOff = []; ws.close(); } }),
+    chk('Mute the room I am talking in (stops speaker feedback; turn off with earbuds if you want to hear replies while talking)', 'halfDuplex', applyDuplex),
     chk('Keep screen on', 'wake', setWake),
-    h('p', { class: 'sub' }, 'Earbud button: click toggles hands-free talk in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
+    h('p', { class: 'sub' }, 'Earbud button: click toggles talk (latched) in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,
     h('h2', {}, 'Account'),
     h('button', { onclick: changePassword }, 'Change password'),
@@ -441,7 +448,7 @@ function updateMediaSession() {
   navigator.mediaSession.metadata = new MediaMetadata({ title: 'Intercom live', artist: 'NetSpeak', artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
   navigator.mediaSession.playbackState = 'playing';
   const on = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
-  // Earbud click arrives as play/pause: use it as a hands-free talk toggle.
+  // Earbud click arrives as play/pause: use it as a latch-talk toggle.
   on('pause', earbudToggle); on('play', () => { engine.resume(); earbudToggle(); });
   on('togglemicrophone', earbudToggle); on('hangup', () => { for (const id of [...S.talking]) talkStop(id); });
   on('nexttrack', () => { const t = S.rooms.filter((r) => S.joined.has(r.id)); if (t.length) { S.active = t[(t.findIndex((r) => r.id === S.active) + 1) % t.length].id; toast('Active room: ' + t.find((r) => r.id === S.active).name); } });
@@ -460,7 +467,7 @@ async function setWake() {
 }
 
 // Black full-screen overlay: screen stays awake, OLED draws almost nothing, touches are ignored
-// until a deliberate 1.5 s press-and-hold. Audio, talking and call mode keep running underneath.
+// until a deliberate 1.5 s press-and-hold. Audio and talking keep running underneath.
 function pocketLock() {
   if (pocket) return;
   pocket = true; setWake();
