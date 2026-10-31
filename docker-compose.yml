@@ -13,8 +13,10 @@ services:
     volumes:
       - ./data:/data                  # users, rooms, certificates: back this folder up
     environment:
-      # Public hostname pointing at this server -> automatic trusted HTTPS (Let's Encrypt, port 443 only).
-      # Leave empty for LAN use with a self-signed certificate.
+      # Nothing is required. Point any hostname at this server and it gets a trusted HTTPS
+      # certificate automatically on first visit (Let's Encrypt, port 443 only). IP addresses and
+      # LAN names work too, with a self-signed certificate.
+      # Optional: lock the server to a single hostname so no other name can request a certificate.
       NETSPEAK_DOMAIN: ""
       # Initial admin password (first start only). Empty = random, printed in `docker compose logs netspeak`.
       NETSPEAK_ADMIN_PASSWORD: ""

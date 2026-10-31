@@ -19,14 +19,13 @@ Needs a Linux machine with Docker and port 443 reachable. Image: `ghcr.io/amurik
 curl -fsSL https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/install.sh | sh
 ```
 
-It creates `./netspeak`, asks for an optional domain (written into `docker-compose.yml`), pulls the image, starts it and prints the admin login.
+It creates `./netspeak`, pulls the image, starts it and prints the admin login. No configuration needed.
 
 **Or by hand (pull the image):**
 
 ```bash
 mkdir netspeak && cd netspeak
 curl -fsSLO https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/docker-compose.yml
-nano docker-compose.yml         # optional: set NETSPEAK_DOMAIN etc. in the environment section
 docker compose up -d
 docker compose logs netspeak    # first-start admin password
 ```
@@ -44,7 +43,7 @@ docker compose up -d --build
 
 ```bash
 docker run -d --name netspeak --restart unless-stopped -p 443:443 -v netspeak:/data \
-  -e NETSPEAK_DOMAIN=intercom.example.com ghcr.io/amurikurthy/netspeak:latest
+  ghcr.io/amurikurthy/netspeak:latest
 ```
 
 Open `https://your-host`, sign in as `admin`, and change the password under Settings.
@@ -53,18 +52,22 @@ Open `https://your-host`, sign in as `admin`, and change the password under Sett
 
 ### HTTPS (required for the microphone)
 
-| Setup | Config |
+Zero configuration. On each connection netspeak looks at the hostname the browser used:
+
+| You open | You get |
 |---|---|
-| Public hostname pointing at the server | `NETSPEAK_DOMAIN=intercom.example.com`: trusted Let's Encrypt cert, obtained over port 443 only |
-| LAN / no domain | nothing: self-signed cert. You accept a browser warning once; installing as an app may be limited |
-| Behind Caddy/Traefik/nginx/Cloudflare Tunnel | `NETSPEAK_TLS=off` (listens on 8080) and `NETSPEAK_TRUST_PROXY=1`. Proxy must pass WebSockets |
+| `https://any-name-pointing-here.example.com` | a trusted Let's Encrypt certificate, fetched automatically on the first visit (a few seconds, validated over port 443 only, no port 80) |
+| an IP address, `box.local`, `localhost` | a self-signed certificate (one browser warning; installing as an app may be limited) |
+| behind Caddy/Traefik/nginx/Cloudflare Tunnel | set `NETSPEAK_TLS: "off"` (listens on 8080) and `NETSPEAK_TRUST_PROXY: "1"`; the proxy must pass WebSockets |
+
+For a trusted certificate you only need a DNS record for any name pointing at the server's public IP and port 443 reachable from the internet. Setting `NETSPEAK_DOMAIN` is optional and locks the server to that one hostname. Certificate requests are rate-limited so scanners can't exhaust Let's Encrypt limits.
 
 ### Environment
 
 | Variable | Default | |
 |---|---|---|
-| `NETSPEAK_DOMAIN` | | public hostname, enables automatic HTTPS |
-| `NETSPEAK_TLS` | auto | `auto` (Let's Encrypt), `selfsigned`, `off` |
+| `NETSPEAK_DOMAIN` | | optional: only this hostname may get a certificate |
+| `NETSPEAK_TLS` | auto | `auto` (Let's Encrypt + self-signed fallback), `selfsigned`, `off` |
 | `NETSPEAK_PORT` | 443 (8080 if TLS off) | |
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password |
 | `NETSPEAK_EMAIL` | | Let's Encrypt contact |

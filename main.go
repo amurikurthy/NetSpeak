@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"errors"
 	"io/fs"
 	"log"
 	"math/big"
@@ -36,14 +38,7 @@ func env(k, def string) string {
 func main() {
 	dataDir := env("NETSPEAK_DATA", "/data")
 	domain := env("NETSPEAK_DOMAIN", "")
-	mode := env("NETSPEAK_TLS", "")
-	if mode == "" {
-		if domain != "" {
-			mode = "auto"
-		} else {
-			mode = "selfsigned"
-		}
-	}
+	mode := env("NETSPEAK_TLS", "auto")
 	port := env("NETSPEAK_PORT", map[bool]string{true: "8080", false: "443"}[mode == "off"])
 
 	st, first, err := OpenStore(dataDir)
@@ -124,16 +119,33 @@ func main() {
 		log.Printf("netspeak listening on http://:%s (TLS terminated by your reverse proxy)", port)
 		log.Fatal(srv.ListenAndServe())
 	case "auto":
-		if domain == "" {
-			log.Fatal("NETSPEAK_TLS=auto needs NETSPEAK_DOMAIN")
-		}
+		// Zero config: any hostname that reaches this server gets a trusted Let's Encrypt
+		// certificate on first visit (tls-alpn-01, validated over 443 itself). Names that
+		// cannot get one (IP addresses, LAN names, localhost, DNS not pointing here)
+		// fall back to a self-signed certificate so the site still loads.
 		m := &autocert.Manager{
-			Prompt: autocert.AcceptTOS, HostPolicy: autocert.HostWhitelist(domain),
+			Prompt: autocert.AcceptTOS, HostPolicy: newHostGate(domain).policy,
 			Cache: autocert.DirCache(filepath.Join(dataDir, "certs")), Email: env("NETSPEAK_EMAIL", ""),
 		}
-		// tls-alpn-01 challenge: Let's Encrypt validates over 443 itself, no port 80 needed.
-		srv.TLSConfig = m.TLSConfig()
-		log.Printf("netspeak https://%s (Let's Encrypt, port %s only)", domain, port)
+		ss := selfSigned(filepath.Join(dataDir, "certs"), domain)
+		cfg := m.TLSConfig()
+		cfg.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			for _, p := range hi.SupportedProtos {
+				if p == "acme-tls/1" {
+					return m.GetCertificate(hi)
+				}
+			}
+			if !publicName(hi.ServerName) {
+				return ss.get(hi)
+			}
+			c, err := m.GetCertificate(hi)
+			if err != nil {
+				return ss.get(hi)
+			}
+			return c, nil
+		}
+		srv.TLSConfig = cfg
+		log.Printf("netspeak on https://:%s. Trusted HTTPS is automatic for any hostname pointing here; other addresses use a self-signed certificate.", port)
 	default:
 		srv.TLSConfig = &tls.Config{GetCertificate: selfSigned(filepath.Join(dataDir, "certs"), domain).get}
 		log.Printf("netspeak on https://:%s with a self-signed certificate. Set NETSPEAK_DOMAIN for a trusted one.", port)
@@ -227,4 +239,68 @@ func (s *selfSignedCerts) get(hi *tls.ClientHelloInfo) (*tls.Certificate, error)
 	}
 	s.cache[safe] = &c
 	return &c, nil
+}
+
+// publicName reports whether a TLS server name could plausibly get a public certificate.
+func publicName(n string) bool {
+	n = strings.ToLower(n)
+	if n == "" || !strings.Contains(n, ".") || net.ParseIP(n) != nil || strings.ContainsAny(n, "_ ") {
+		return false
+	}
+	for _, suf := range []string{".local", ".lan", ".internal", ".localhost", ".home", ".arpa", ".test", ".invalid", ".example"} {
+		if strings.HasSuffix(n, suf) {
+			return false
+		}
+	}
+	return true
+}
+
+// hostGate decides which hostnames may trigger a Let's Encrypt order. It is what makes
+// "any hostname" safe: scanners sending random SNI values cannot burn the ACME rate limit.
+type hostGate struct {
+	only  string
+	mu    sync.Mutex
+	first map[string]time.Time // start of the current attempt window per host
+	hour  []time.Time          // window starts within the last hour
+	now   func() time.Time
+}
+
+func newHostGate(only string) *hostGate {
+	return &hostGate{only: strings.ToLower(only), first: map[string]time.Time{}, now: time.Now}
+}
+
+func (g *hostGate) policy(_ context.Context, host string) error { return g.allow(host) }
+
+func (g *hostGate) allow(host string) error {
+	host = strings.ToLower(host)
+	if g.only != "" && host != g.only {
+		return errors.New("host not allowed")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.now()
+	if t, ok := g.first[host]; ok {
+		if now.Sub(t) < 2*time.Minute {
+			return nil // order already in progress: let concurrent handshakes share it
+		}
+		if now.Sub(t) < 15*time.Minute {
+			return errors.New("recently attempted; backing off")
+		}
+	}
+	kept := g.hour[:0]
+	for _, t := range g.hour {
+		if now.Sub(t) < time.Hour {
+			kept = append(kept, t)
+		}
+	}
+	g.hour = kept
+	if len(g.hour) >= 15 {
+		return errors.New("too many certificate attempts this hour")
+	}
+	g.hour = append(g.hour, now)
+	g.first[host] = now
+	if len(g.first) > 1000 {
+		g.first = map[string]time.Time{host: now}
+	}
+	return nil
 }
