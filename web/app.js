@@ -271,7 +271,10 @@ function earbudToggle() {
 // ----- mic / talking -----
 function micOpts() {
   return { channels: 1, bitrate: 32000, application: 'voip', deviceId: prefs.micId, gain: prefs.micGain,
-    ec: true, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback,   // echo cancel + noise suppression only
+    // Browser echo cancellation is OFF on purpose: on Android it switches the whole phone into "call" audio mode
+    // (a separate call volume slider, wrong routing). Noise suppression is plain software, and howling is
+    // handled by the feedback suppressor in the mic worklet.
+    ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback,
     onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
     onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
     onFrame: (seq, d) => {
