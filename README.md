@@ -11,17 +11,36 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 
 ## Deploy
 
-Image: `ghcr.io/amurikurthy/netspeak:latest` (built by GitHub Actions on every push to main).
+Needs a Linux machine with Docker and port 443 reachable. Image: `ghcr.io/amurikurthy/netspeak:latest`, built by GitHub Actions on every push to `main` (amd64 + arm64, so Raspberry Pi works).
+
+**One line:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/install.sh | sh
+```
+
+It creates `./netspeak`, asks for an optional domain, pulls the image, starts it and prints the admin login.
+
+**Or by hand (pull the image):**
 
 ```bash
 mkdir netspeak && cd netspeak
-curl -O https://raw.githubusercontent.com/amurikurthy/netspeak/main/docker-compose.yml
-# set NETSPEAK_DOMAIN in the file if you have a public hostname
+curl -fsSLO https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/.env.example -o .env   # optional: set your domain
 docker compose up -d
 docker compose logs netspeak    # first-start admin password
 ```
 
-Or without compose:
+**Or build from source:**
+
+```bash
+git clone https://github.com/amurikurthy/NetSpeak && cd NetSpeak
+docker compose up -d --build
+```
+
+**Update:** `docker compose pull && docker compose up -d` (your data in `./data` is kept).
+
+**No compose:**
 
 ```bash
 docker run -d --name netspeak --restart unless-stopped -p 443:443 -v netspeak:/data \
@@ -29,6 +48,8 @@ docker run -d --name netspeak --restart unless-stopped -p 443:443 -v netspeak:/d
 ```
 
 Open `https://your-host`, sign in as `admin`, and change the password under Settings.
+
+> First time only: GitHub publishes the image as private. In the repo, open Packages → netspeak → Package settings → Change visibility → Public so `docker pull` works without logging in.
 
 ### HTTPS (required for the microphone)
 
