@@ -33,7 +33,7 @@ export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.str
 
 // ---------- state ----------
 const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, joined: new Set(), talking: new Set(),
-  listening: new Set(), publishing: null, connected: false, c: 0 };
+  listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, lingerTimer = null, voice = null, wakeLock = null;
 let installEvt = null;
@@ -163,7 +163,9 @@ function onMsg(m) {
       for (const id of prefs.listening) if (fids.has(id)) S.listening.add(id);
       for (const id of [...S.listening]) { if (fids.has(id)) send({ t: 'listen', feed: id, on: true }); else S.listening.delete(id); }
       if (S.publishing && !fids.has(S.publishing)) S.publishing = null;
-      render(); break;
+      render();
+      for (const id of [...S.calls]) { if (S.joined.has(id) && !S.talking.has(id)) talkStart(id); else if (!S.joined.has(id)) S.calls.delete(id); }
+      break;
     }
     case 'presence': S.presence = m; update(); break;
     case 'publish': if (!m.on && S.publishing === m.feed) stopPublish(true); break;
@@ -196,15 +198,17 @@ function roomCard(r) {
     persist(); update();
   } });
   const btn = r.talk ? talkButton(r) : null;
+  const call = r.talk ? h('button', { style: 'width:100%;margin-top:8px', onclick: () => toggleCall(r.id) }) : null;
   const el = h('section', { class: 'card room', style: `--c:${r.color}` },
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), h('div', { class: 'sub' }, r.talk ? 'Listen & talk' : 'Listen only')),
       h('label', { class: 'sw' }, sw, h('i'))),
-    chips, h('div', { class: 'sub' }, 'Room volume'), vol, btn);
+    chips, h('div', { class: 'sub' }, 'Room volume'), vol, btn, call);
   cards.set(r.id, () => {
     const on = S.joined.has(r.id);
     sw.checked = on; el.classList.toggle('joined', on);
     const ms = S.presence.rooms?.[r.id] || [];
     chips.replaceChildren(...(on ? ms.map((m) => h('span', { class: 'chip' + (m.t ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, `${ms.length} in room`)]));
+    if (call) { call.hidden = !on; const c = S.calls.has(r.id); call.textContent = c ? '📞 In call: tap to hang up' : '📞 Hands-free call mode'; call.classList.toggle('primary', c); }
     if (btn) { btn.hidden = !on; btn.classList.toggle('on', S.talking.has(r.id)); btn._label(); }
   });
   if (S.joined.has(r.id)) setTimeout(() => applyVol('room', r.id, prefs.roomVol[r.id] ?? 1), 0);
@@ -233,11 +237,23 @@ function talkButton(r) {
   return b;
 }
 
+function toggleCall(id) {
+  if (S.calls.has(id)) return talkStop(id);
+  S.calls.add(id); S.active = id; talkStart(id);
+}
+// Earbud / headset button: toggles hands-free talk in the active room.
+function earbudToggle() {
+  const talkable = S.rooms.filter((r) => r.talk && S.joined.has(r.id));
+  const id = (S.active && talkable.find((r) => r.id === S.active)?.id) || talkable[0]?.id;
+  if (!id) return toast('Join a room first');
+  if (S.talking.has(id)) { talkStop(id); toast('Mic off'); } else { toggleCall(id); toast('Mic on'); }
+}
+
 // ----- mic / talking -----
 function micOpts() {
   const p = PRESETS[prefs.preset] || PRESETS.phone;
   return { channels: 1, bitrate: 32000, application: 'voip', deviceId: prefs.micId, gain: prefs.micGain,
-    ec: p.ec, ns: p.ns, agc: p.agc, hpf: p.hpf, gate: p.gate, gateDb: prefs.gateDb,
+    ec: p.ec, ns: p.ns, agc: p.agc, hpf: p.hpf, gate: p.gate || S.calls.size > 0, gateDb: prefs.gateDb,
     onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
     onFrame: (seq, d) => {
       if (!ws || ws.readyState !== 1) return;
@@ -267,14 +283,15 @@ async function talkStart(id) {
   S.talking.add(id); update();
   const v = await ensureMic();
   if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
-  engine.talkingNow = true; v.sending = true;
+  engine.talkingNow = true; v.sending = true; S.active = id; applyGate();
   send({ t: 'talk', room: id, on: true });
 }
 function talkStop(id) {
-  S.talking.delete(id); send({ t: 'talk', room: id, on: false });
+  S.talking.delete(id); S.calls.delete(id); applyGate(); send({ t: 'talk', room: id, on: false });
   if (!S.talking.size) stopSending();
   update(); releaseMic();
 }
+function applyGate() { voice?.setGate((PRESETS[prefs.preset] || PRESETS.phone).gate || S.calls.size > 0, prefs.gateDb); }
 function stopSending() { engine.talkingNow = false; if (voice) voice.sending = false; releaseMic(); }
 
 // ----- feeds -----
@@ -370,7 +387,7 @@ async function settings() {
     h('label', { class: 'f' }, 'Lower program while people talk'), duck,
     h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
     chk('Keep screen on', 'wake', setWake),
-    h('p', { class: 'sub' }, 'Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
+    h('p', { class: 'sub' }, 'Earbud button: click toggles hands-free talk in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Account'),
     !S.me.guest && h('button', { onclick: changePassword }, 'Change password'),
     installEvt && h('button', { style: 'margin-left:8px', onclick: () => { installEvt.prompt(); } }, 'Install app'),
@@ -390,11 +407,16 @@ function changePassword() {
 
 // ----- background / lock-screen niceties -----
 function updateMediaSession() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
   if (!('mediaSession' in navigator)) return;
   navigator.mediaSession.metadata = new MediaMetadata({ title: 'Intercom live', artist: 'netspeak', artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
   navigator.mediaSession.playbackState = 'playing';
-  navigator.mediaSession.setActionHandler('pause', () => { engine.setMaster(0); toast('Muted'); });
-  navigator.mediaSession.setActionHandler('play', () => { engine.setMaster(prefs.master); engine.resume(); });
+  const on = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
+  // Earbud click arrives as play/pause: use it as a hands-free talk toggle.
+  on('pause', earbudToggle); on('play', () => { engine.resume(); earbudToggle(); });
+  on('togglemicrophone', earbudToggle); on('hangup', () => { for (const id of [...S.talking]) talkStop(id); });
+  on('nexttrack', () => { const t = S.rooms.filter((r) => S.joined.has(r.id)); if (t.length) { S.active = t[(t.findIndex((r) => r.id === S.active) + 1) % t.length].id; toast('Active room: ' + t.find((r) => r.id === S.active).name); } });
+  try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
 }
 async function setWake() {
   try {
