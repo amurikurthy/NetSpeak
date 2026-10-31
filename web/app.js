@@ -40,7 +40,7 @@ export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.str
 const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, joined: new Set(), talking: new Set(),
   listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
-let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, lingerTimer = null, voice = null, wakeLock = null;
+let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, voice = null, micPromise = null, micError = '', wakeLock = null;
 let installEvt = null, lastFbToast = 0;
 const root = $('#app');
 
@@ -158,6 +158,7 @@ function onMsg(m) {
       persist();
       render();
       for (const id of [...S.calls]) { if (!S.talking.has(id)) talkStart(id); }
+      if (rooms.some((r) => r.talk)) ensureMic(); else closeMic();   // mic stays open while the user can talk anywhere
       if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
       break;
     }
@@ -282,33 +283,36 @@ function micOpts() {
     } };
 }
 
-async function ensureMic() {
-  clearTimeout(lingerTimer);
-  if (voice) return voice;
-  try { voice = await engine.capture('voice', micOpts()); }
-  catch (e) { toast('Microphone unavailable: ' + (e.name === 'NotAllowedError' ? 'permission denied' : e.message)); return null; }
-  return voice;
+// The microphone stays open for as long as the app is open (and the user can talk anywhere). Opening and
+// closing it makes phones and PCs switch audio modes, which glitches what you hear. Nothing is sent
+// until a talk button is pressed.
+function ensureMic() {
+  if (voice) return Promise.resolve(voice);
+  if (!micPromise) {
+    micPromise = engine.capture('voice', micOpts())
+      .then((v) => { voice = v; micError = ''; return v; })
+      .catch((e) => { micError = e.name === 'NotAllowedError' ? 'permission denied' : e.message; return null; })
+      .finally(() => { micPromise = null; });
+  }
+  return micPromise;
 }
-function releaseMic() {
-  clearTimeout(lingerTimer);
-  if (S.talking.size) return;
-  lingerTimer = setTimeout(() => { if (!S.talking.size) { engine.stopCapture('voice'); voice = null; if (ui.mic) ui.mic.style.width = 0; } }, 8000);
-}
+async function closeMic() { if (voice) { const v = voice; voice = null; await engine.stopCapture('voice'); if (ui.mic) ui.mic.style.width = 0; } }
 async function talkStart(id) {
   await engine.start(); engine.resume();
   for (const o of [...S.talking]) if (o !== id) talkStop(o);   // only ever transmit to one room
   S.talking.add(id); S.active = id; update();
   const v = await ensureMic();
-  if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
+  if (!v) { toast('Microphone unavailable: ' + micError); S.talking.delete(id); update(); return; }
+  if (!S.talking.has(id)) return;
   v.sending = true; S.active = id;
   send({ t: 'talk', room: id, on: true });
 }
 function talkStop(id) {
   S.talking.delete(id); S.calls.delete(id); send({ t: 'talk', room: id, on: false });
   if (!S.talking.size) stopSending();
-  update(); releaseMic();
+  update();
 }
-function stopSending() { if (voice) voice.sending = false; releaseMic(); }
+function stopSending() { if (voice) voice.sending = false; }
 
 // ----- feeds -----
 function feedCard(f) {
@@ -388,7 +392,6 @@ async function settings() {
   const spk = h('select', { onchange: (e) => { prefs.spkId = e.target.value; savePrefs(); engine.setSink(prefs.spkId); } }, h('option', { value: '' }, 'System default'), outs.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.spkId)));
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
   const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
-  const testBtn = h('button', { onclick: async () => { if (!await ensureMic()) return; testBtn.textContent = 'Mic open: speak and watch the meter'; releaseMic(); } }, 'Test microphone');
   const diag = h('pre', { style: 'white-space:pre-wrap' });
   const tick = () => {
     const st = engine.stats, v = engine.captures.get('voice');
@@ -409,7 +412,7 @@ async function settings() {
     h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Settings'), h('button', { class: 'ghost', onclick: close }, '✕')),
     h('label', { class: 'f' }, 'Your name'), h('div', { class: 'row' }, name, h('button', { onclick: async () => { try { S.me = await api('POST', '/api/me', { displayName: name.value }); toast('Saved'); location.reload(); } catch (e) { toast(e.message); } } }, 'Save')),
     h('h2', {}, 'Microphone'),
-    h('label', { class: 'f' }, 'Input device' + (labeled ? '' : ' (talk once to list names)')), mic, h('div', { style: 'margin-top:10px' }, testBtn),
+    h('label', { class: 'f' }, 'Input device' + (labeled ? '' : ' (talk once to list names)')), mic,
     h('h2', {}, 'Listening'),
     outs.length && h('div', {}, h('label', { class: 'f' }, 'Output device'), spk),
     chk('Automatic feedback protection (cuts howling tones on your mic; you can still hear everyone while you talk)', 'feedback', () => { voice?.setFeedback(prefs.feedback); }),
@@ -422,7 +425,7 @@ async function settings() {
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);
 }
-async function reopenMic() { if (voice) { const was = voice.sending; await engine.stopCapture('voice'); voice = null; if (was) { const v = await ensureMic(); if (v) v.sending = was; } } }
+async function reopenMic() { if (voice) { const was = voice.sending; await closeMic(); const v = await ensureMic(); if (v) v.sending = was; } }
 function changePassword() {
   const o = h('input', { type: 'password', autocomplete: 'current-password' }), n = h('input', { type: 'password', autocomplete: 'new-password' });
   const close = () => sheet.remove();
