@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -32,6 +33,7 @@ func env(k, def string) string {
 }
 
 func main() {
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 	dataDir := env("NETSPEAK_DATA", "/data")
 	mode := env("NETSPEAK_TLS", "selfsigned")
 	port := env("NETSPEAK_PORT", map[bool]string{true: "8080", false: "443"}[mode == "off"])

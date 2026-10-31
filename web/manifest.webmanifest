@@ -2,6 +2,7 @@
   "name": "NetSpeak",
   "short_name": "NetSpeak",
   "description": "Self-hosted intercom with program feeds",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

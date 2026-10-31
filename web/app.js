@@ -41,11 +41,13 @@ const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, 
   listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, voice = null, micPromise = null, micError = '', wakeLock = null;
-let installEvt = null, lastFbToast = 0;
+let installEvt = null, lastFbToast = 0, swState = 'not started';
 const root = $('#app');
 
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });
-if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+if ('serviceWorker' in navigator) {
+  addEventListener('load', () => navigator.serviceWorker.register('/sw.js').then(() => { swState = 'registered'; }).catch((e) => { swState = 'FAILED: ' + e.message; }));
+} else swState = 'not supported by this browser';
 
 // ---------- boot ----------
 async function boot() {
@@ -397,6 +399,8 @@ async function settings() {
     const st = engine.stats, v = engine.captures.get('voice');
     diag.textContent = [
       `connection:   ${S.connected ? 'online' : 'OFFLINE'}`,
+      `https:        ${isSecureContext ? (location.protocol === 'https:' ? 'yes, trusted' : 'ok (localhost)') : location.protocol === 'https:' ? 'yes, but NOT trusted (certificate warning)' : 'NO: installing needs a trusted HTTPS address'}`,
+      `app install:  ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'running as an installed app' : installEvt ? 'ready: use Install app below' : 'not offered yet (see service worker line)'} · service worker ${swState}`,
       `codec:        ${supported ? 'WebCodecs Opus OK' : 'NOT SUPPORTED in this browser'}`,
       `audio engine: ${engine.ctx ? engine.ctx.state : 'not started'}${engine.el?.paused ? ' (output paused)' : ''}`,
       `microphone:   ${v ? (v.track?.readyState + ' / ' + (v.track?.label || '?') + (v.track?.muted ? ' (MUTED by OS)' : '')) : 'closed'}`,
