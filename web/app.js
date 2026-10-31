@@ -316,6 +316,8 @@ function feedCard(f) {
   const live = h('span', { class: 'badge' }, 'OFFLINE'), n = h('span', { class: 'sub' });
   const vol = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.feedVol[f.id] ?? 1,
     oninput: (e) => { prefs.feedVol[f.id] = +e.target.value; savePrefs(); applyVol('feed', f.id, prefs.feedVol[f.id]); } });
+  // Listener controls. Hidden while this device is the sender: the server never plays a feed back to its own sender.
+  const volBox = h('div', {}, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol);
   const play = h('button', { class: 'primary', onclick: async () => {
     if (S.listening.has(f.id)) { if (!prefs.feedsOff.includes(f.id)) prefs.feedsOff.push(f.id); S.listening.delete(f.id); send({ t: 'listen', feed: f.id, on: false }); }
     else { prefs.feedsOff = prefs.feedsOff.filter((x) => x !== f.id); S.listening.add(f.id); send({ t: 'listen', feed: f.id, on: true }); await engine.start(); applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1); }
@@ -326,7 +328,7 @@ function feedCard(f) {
     h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.feedGain, oninput: (e) => { prefs.feedGain = +e.target.value; savePrefs(); engine.captures.get('feed')?.setGain(prefs.feedGain); } })) : null;
   const el = h('section', { class: 'card' },
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name), h('div', { class: 'sub' }, f.description || 'Program audio')),
-      live), h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol,
+      live), volBox,
     lvl, h('div', { class: 'row', style: 'margin-top:10px' }, play, src, n));
   cards.set('f' + f.id, () => {
     const p = S.presence.feeds?.[f.id] || {};
@@ -334,7 +336,9 @@ function feedCard(f) {
     n.textContent = `${p.n || 0} listening`;
     const on = S.listening.has(f.id);
     play.textContent = on ? '■ Stop listening' : '▶ Listen';
-    if (lvl) lvl.hidden = S.publishing !== f.id;
+    const sending = S.publishing === f.id;
+    volBox.hidden = sending; play.hidden = sending;
+    if (lvl) lvl.hidden = !sending;
     if (src) { src.textContent = S.publishing === f.id ? '■ Stop sending' : 'Send from this device'; src.classList.toggle('danger', S.publishing === f.id); }
   });
   if (S.listening.has(f.id)) setTimeout(() => applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1), 0);
