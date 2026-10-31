@@ -287,7 +287,7 @@ function micOpts() {
     // handled by the feedback suppressor in the mic worklet.
     ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback,
     onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
-    onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
+    onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; vadFrame(l); },
     onFrame: (seq, d) => {
       if (!ws || ws.readyState !== 1) return;
       for (const id of S.talking) {
@@ -313,6 +313,16 @@ function ensureMic() {
   return micPromise;
 }
 async function closeMic() { if (voice) { const v = voice; voice = null; await engine.stopCapture('voice'); if (ui.mic) ui.mic.style.width = 0; } }
+// Voice detection, run on every 20 ms mic frame: tells the room who is actually speaking (as opposed to
+// merely having talk switched on). The noise floor is tracked so quiet rooms and noisy rooms both work.
+const vad = { floor: 0.01, on: false, run: 0, quiet: 0 };
+function vadFrame(l) {
+  vad.floor = l < vad.floor ? l : vad.floor + (l - vad.floor) * 0.0002;
+  if (l > Math.max(0.006, vad.floor * 4)) { vad.quiet = 0; if (!vad.on && ++vad.run >= 2) setSpeaking(true); }
+  else { vad.run = 0; if (vad.on && ++vad.quiet >= 15) setSpeaking(false); }   // 300 ms hangover
+}
+function setSpeaking(on) { vad.on = on; for (const id of S.talking) send({ t: 'speak', room: id, on }); }
+
 async function talkStart(id) {
   await engine.start(); engine.resume();
   for (const o of [...S.talking]) if (o !== id) talkStop(o);   // only ever transmit to one room
@@ -322,6 +332,7 @@ async function talkStart(id) {
   if (!S.talking.has(id)) return;
   v.sending = true; S.active = id;
   send({ t: 'talk', room: id, on: true });
+  if (vad.on) send({ t: 'speak', room: id, on: true });
 }
 function talkStop(id) {
   S.talking.delete(id); S.calls.delete(id); send({ t: 'talk', room: id, on: false });

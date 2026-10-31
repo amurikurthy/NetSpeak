@@ -63,3 +63,11 @@ func TestSortMembersIsStable(t *testing.T) {
 		}
 	}
 }
+
+func TestSpeakersComeFirst(t *testing.T) {
+	ms := []presenceMember{{C: 1, N: "Amy"}, {C: 2, N: "Bob", T: true}, {C: 3, N: "Cat"}, {C: 4, N: "Abe", T: true}}
+	sortMembers(ms)
+	if ms[0].N != "Abe" || ms[1].N != "Bob" || ms[2].N != "Amy" || ms[3].N != "Cat" {
+		t.Fatalf("speakers first, each group alphabetical: %+v", ms)
+	}
+}

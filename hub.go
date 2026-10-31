@@ -52,13 +52,14 @@ type Client struct {
 	done   chan struct{}
 	once   sync.Once
 
-	mu      sync.RWMutex
-	user    User
-	perms   map[string]Perm // "r:<id>" / "f:<id>"
-	joined  map[string]bool // room ids
-	talking map[string]bool // room ids
-	listen  map[string]bool // feed ids
-	publish string          // feed id being published from this browser
+	mu       sync.RWMutex
+	user     User
+	perms    map[string]Perm // "r:<id>" / "f:<id>"
+	joined   map[string]bool // room ids
+	talking  map[string]bool // room ids
+	speaking map[string]bool // rooms where the mic currently hears speech (client voice detection)
+	listen   map[string]bool // feed ids
+	publish  string          // feed id being published from this browser
 }
 
 type Hub struct {
@@ -151,7 +152,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(64 * 1024)
 	c := &Client{
 		h: h, conn: conn, userID: u.ID, user: *u, send: make(chan outMsg, 512), done: make(chan struct{}),
-		perms: map[string]Perm{}, joined: map[string]bool{}, talking: map[string]bool{}, listen: map[string]bool{},
+		perms: map[string]Perm{}, joined: map[string]bool{}, talking: map[string]bool{}, speaking: map[string]bool{}, listen: map[string]bool{},
 	}
 	h.mu.Lock()
 	for {
@@ -274,6 +275,7 @@ func (c *Client) control(t, room, feed string, on bool) {
 		c.mu.Lock()
 		delete(c.joined, room)
 		delete(c.talking, room)
+		delete(c.speaking, room)
 		c.mu.Unlock()
 	case "talk":
 		c.mu.Lock()
@@ -281,6 +283,15 @@ func (c *Client) control(t, room, feed string, on bool) {
 			c.talking[room] = true
 		} else {
 			delete(c.talking, room)
+			delete(c.speaking, room)
+		}
+		c.mu.Unlock()
+	case "speak": // voice detection result from the client: only meaningful while talking
+		c.mu.Lock()
+		if on && c.talking[room] {
+			c.speaking[room] = true
+		} else {
+			delete(c.speaking, room)
 		}
 		c.mu.Unlock()
 	case "listen":
@@ -526,8 +537,10 @@ func (c *Client) refresh() {
 		if !perms["r:"+id].Listen {
 			delete(c.joined, id)
 			delete(c.talking, id)
+			delete(c.speaking, id)
 		} else if !perms["r:"+id].Talk {
 			delete(c.talking, id)
+			delete(c.speaking, id)
 		}
 	}
 	for id := range c.listen {
@@ -570,10 +583,13 @@ type presenceMember struct {
 	T bool   `json:"t,omitempty"`
 }
 
-// sortMembers gives a room's member list one fixed order (name, then connection). Without it the order
+// sortMembers gives a room's member list one fixed order: speakers first, then by name, then connection. Without it the order
 // follows Go's deliberately random map iteration, and the names reshuffle on every update.
 func sortMembers(ms []presenceMember) {
 	sort.Slice(ms, func(i, j int) bool {
+		if ms[i].T != ms[j].T { // whoever is speaking comes first
+			return ms[i].T
+		}
 		a, b := strings.ToLower(ms[i].N), strings.ToLower(ms[j].N)
 		if a != b {
 			return a < b
@@ -595,7 +611,7 @@ func (h *Hub) broadcastPresence() {
 	for c := range h.clients {
 		c.mu.RLock()
 		for r := range c.joined {
-			rooms[r] = append(rooms[r], member{c.id, c.user.DisplayName, c.talking[r]})
+			rooms[r] = append(rooms[r], member{c.id, c.user.DisplayName, c.talking[r] && c.speaking[r]})
 		}
 		for f := range c.listen {
 			listeners[f]++
