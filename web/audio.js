@@ -1,4 +1,15 @@
 // Audio engine: Opus over the app WebSocket, Web Audio mixing, mic capture.
+// One second of near-silence (random +/-1 LSB, about -90 dB) as a WAV blob, so the browser sees real media playing.
+function silentClipUrl() {
+  const rate = 8000, n = rate, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.random() < 0.5 ? -1 : 1, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
 export const supported = typeof AudioEncoder !== 'undefined' && typeof AudioDecoder !== 'undefined' &&
   typeof AudioData !== 'undefined' && typeof AudioWorkletNode !== 'undefined';
 
@@ -32,14 +43,16 @@ export class Engine {
     this.program = ctx.createGain();
     this.comms.connect(this.master);
     this.program.connect(this.master);
-    // Output through a media element so playback continues with the screen off.
-    const dest = ctx.createMediaStreamDestination();
-    this.master.connect(dest);
-    this.el = new Audio();
-    this.el.srcObject = dest.stream;
+    // All sound leaves through the AudioContext, on the phone's normal media volume. (Playing it through a
+    // media element fed from a MediaStream would put it on Android's separate "call" volume.)
+    this.master.connect(ctx.destination);
+    if (this.sinkId && ctx.setSinkId) ctx.setSinkId(this.sinkId).catch(() => {});
+    // A silent, looping clip keeps the page registered as media playback, so the browser keeps it running
+    // with the screen off and shows lock-screen controls. It carries no sound of its own.
+    this.el = new Audio(silentClipUrl());
+    this.el.loop = true;
     this.el.setAttribute('playsinline', '');
     this.el.play().catch(() => {});
-    if (this.sinkId && this.el.setSinkId) this.el.setSinkId(this.sinkId).catch(() => {});
     await ctx.audioWorklet.addModule('/worklet.js');
     this.master.gain.value = this.vol.master;
     setInterval(() => this.housekeeping(), 1000);
@@ -56,7 +69,7 @@ export class Engine {
 
   async setSink(id) {
     this.sinkId = id || '';
-    if (this.el && this.el.setSinkId) await this.el.setSinkId(this.sinkId).catch(() => {});
+    if (this.ctx && this.ctx.setSinkId) await this.ctx.setSinkId(this.sinkId).catch(() => {});
   }
 
   setMaster(v) { this.vol.master = v; if (this.master) this.master.gain.value = v; }
