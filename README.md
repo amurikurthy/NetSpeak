@@ -7,7 +7,7 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 - **Permissions**: users created by the admin, assigned straight to rooms and feeds with *listen / talk / send*. Changes apply instantly to connected clients
 - **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
 - **Feedback protection**: an automatic suppressor finds howling tones on your mic and cuts just that frequency, so you can still hear everyone while you talk (and talk over each other). Earbuds remain the real cure for two devices in one room
-- **Noise handling** for phones: echo cancel + noise suppression + auto gain + low-cut + noise gate. Feeds bypass all of it
+- **Voice mic processing**: echo cancellation and noise suppression, with a gentle low-cut. No auto gain, no gate. Program feeds bypass all of it
 - **Single port**: web app, API and audio all ride one connection (WebSocket). Nothing else to forward, works behind reverse proxies and tunnels
 
 ## Deploy

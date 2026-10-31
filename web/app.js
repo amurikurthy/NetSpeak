@@ -1,4 +1,4 @@
-import { Engine, PRESETS, supported } from './audio.js';
+import { Engine, supported } from './audio.js';
 
 export const $ = (s, r = document) => r.querySelector(s);
 export function h(tag, attrs, ...kids) {
@@ -26,8 +26,8 @@ export async function api(method, url, body) {
 }
 
 // ---------- prefs ----------
-const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, wake: false, micOpen: false,
-  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedGain: 1, feedback: true, left: [], feedsOff: [], seeded: false, ver: 2 };
+const defaults = { micId: '', spkId: '', micGain: 1, master: 1, wake: false, micOpen: false,
+  roomVol: {}, feedVol: {}, joined: [], listening: [], feedGain: 1, feedback: true, left: [], feedsOff: [], seeded: false, ver: 2 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
 if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
@@ -264,9 +264,8 @@ function earbudToggle() {
 
 // ----- mic / talking -----
 function micOpts() {
-  const p = PRESETS[prefs.preset] || PRESETS.phone;
   return { channels: 1, bitrate: 32000, application: 'voip', deviceId: prefs.micId, gain: prefs.micGain,
-    ec: p.ec, ns: p.ns, agc: p.agc, hpf: p.hpf, gate: p.gate || S.calls.size > 0, gateDb: prefs.gateDb, feedback: prefs.feedback,
+    ec: true, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback,   // echo cancel + noise suppression only
     onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
     onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
     onFrame: (seq, d) => {
@@ -298,17 +297,14 @@ async function talkStart(id) {
   S.talking.add(id); S.active = id; update();
   const v = await ensureMic();
   if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
-  v.sending = true; S.active = id; applyGate();
-  const tx0 = engine.stats.tx;
-  setTimeout(() => { if (S.talking.has(id) && engine.stats.tx === tx0) toast('Mic is open but no sound is being sent: speak up, or lower the noise gate / pick "Headset" in Settings'); }, 2500);
+  v.sending = true; S.active = id;
   send({ t: 'talk', room: id, on: true });
 }
 function talkStop(id) {
-  S.talking.delete(id); S.calls.delete(id); applyGate(); send({ t: 'talk', room: id, on: false });
+  S.talking.delete(id); S.calls.delete(id); send({ t: 'talk', room: id, on: false });
   if (!S.talking.size) stopSending();
   update(); releaseMic();
 }
-function applyGate() { voice?.setGate((PRESETS[prefs.preset] || PRESETS.phone).gate || S.calls.size > 0, prefs.gateDb); }
 function stopSending() { if (voice) voice.sending = false; releaseMic(); }
 
 // ----- feeds -----
@@ -385,11 +381,8 @@ async function settings() {
   try { const all = await navigator.mediaDevices.enumerateDevices(); ins = all.filter((d) => d.kind === 'audioinput'); outs = all.filter((d) => d.kind === 'audiooutput'); } catch {}
   const labeled = ins.some((d) => d.label);
   const opt = (d, sel) => h('option', { value: d.deviceId, selected: d.deviceId === sel }, d.label || 'Default');
-  const preset = h('select', { onchange: (e) => { prefs.preset = e.target.value; savePrefs(); reopenMic(); } },
-    Object.entries(PRESETS).map(([k, p]) => h('option', { value: k, selected: k === prefs.preset }, p.label)));
   const mic = h('select', { onchange: (e) => { prefs.micId = e.target.value; savePrefs(); reopenMic(); } }, h('option', { value: '' }, 'System default'), ins.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.micId)));
   const spk = h('select', { onchange: (e) => { prefs.spkId = e.target.value; savePrefs(); engine.setSink(prefs.spkId); } }, h('option', { value: '' }, 'System default'), outs.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.spkId)));
-  const gate = h('input', { type: 'range', min: -75, max: -25, step: 1, value: prefs.gateDb, oninput: (e) => { prefs.gateDb = +e.target.value; savePrefs(); voice?.setGate(PRESETS[prefs.preset].gate, prefs.gateDb); } });
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
   const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
   const testBtn = h('button', { onclick: async () => { if (!await ensureMic()) return; testBtn.textContent = 'Mic open: speak and watch the meter'; releaseMic(); } }, 'Test microphone');
@@ -413,9 +406,6 @@ async function settings() {
     h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Settings'), h('button', { class: 'ghost', onclick: close }, '✕')),
     h('label', { class: 'f' }, 'Your name'), h('div', { class: 'row' }, name, h('button', { onclick: async () => { try { S.me = await api('POST', '/api/me', { displayName: name.value }); toast('Saved'); location.reload(); } catch (e) { toast(e.message); } } }, 'Save')),
     h('h2', {}, 'Microphone'),
-    h('label', { class: 'f' }, 'Noise handling'), preset,
-    h('p', { class: 'sub' }, 'Phone / noisy: echo cancel, noise suppression, auto gain, low-cut and a noise gate that stops sending when you are silent. Headset: echo cancel + noise suppression. Raw: nothing.'),
-    h('label', { class: 'f' }, `Noise gate threshold (Phone preset)`), gate,
     h('label', { class: 'f' }, 'Input device' + (labeled ? '' : ' (talk once to list names)')), mic, h('div', { style: 'margin-top:10px' }, testBtn),
     chk('Keep microphone open between talks (faster push-to-talk)', 'micOpen', () => { micOpenChanged(); }),
     h('h2', {}, 'Listening'),

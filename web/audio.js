@@ -2,12 +2,6 @@
 export const supported = typeof AudioEncoder !== 'undefined' && typeof AudioDecoder !== 'undefined' &&
   typeof AudioData !== 'undefined' && typeof AudioWorkletNode !== 'undefined';
 
-export const PRESETS = {
-  phone:  { label: 'Phone / noisy place', ec: true,  ns: true,  agc: true,  hpf: 120, gate: true,  gateDb: -52 },
-  headset:{ label: 'Headset',             ec: true,  ns: true,  agc: false, hpf: 80,  gate: false, gateDb: -55 },
-  raw:    { label: 'Raw (no processing)', ec: false, ns: false, agc: false, hpf: 0,   gate: false, gateDb: -55 },
-};
-
 export class Engine {
   constructor() {
     this.ctx = null;
