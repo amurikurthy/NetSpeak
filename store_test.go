@@ -49,3 +49,17 @@ func TestMigrateGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestSortMembersIsStable(t *testing.T) {
+	want := []presenceMember{{C: 3, N: "amy"}, {C: 9, N: "Bob"}, {C: 2, N: "bob"}, {C: 5, N: "Cat"}}
+	for i := 0; i < 50; i++ {
+		got := []presenceMember{{C: 5, N: "Cat"}, {C: 2, N: "bob"}, {C: 3, N: "amy"}, {C: 9, N: "Bob"}}
+		if i%2 == 1 {
+			got[0], got[3] = got[3], got[0]
+		}
+		sortMembers(got)
+		if got[0].N != "amy" || got[3].N != "Cat" || got[1].C != 2 || got[2].C != 9 {
+			t.Fatalf("round %d: %+v, want %+v", i, got, want)
+		}
+	}
+}

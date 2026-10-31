@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -563,12 +564,26 @@ func (h *Hub) presenceLoop() {
 	}
 }
 
+type presenceMember struct {
+	C uint16 `json:"c"`
+	N string `json:"n"`
+	T bool   `json:"t,omitempty"`
+}
+
+// sortMembers gives a room's member list one fixed order (name, then connection). Without it the order
+// follows Go's deliberately random map iteration, and the names reshuffle on every update.
+func sortMembers(ms []presenceMember) {
+	sort.Slice(ms, func(i, j int) bool {
+		a, b := strings.ToLower(ms[i].N), strings.ToLower(ms[j].N)
+		if a != b {
+			return a < b
+		}
+		return ms[i].C < ms[j].C
+	})
+}
+
 func (h *Hub) broadcastPresence() {
-	type member struct {
-		C uint16 `json:"c"`
-		N string `json:"n"`
-		T bool   `json:"t,omitempty"`
-	}
+	type member = presenceMember
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	rooms := map[string][]member{}
@@ -586,6 +601,9 @@ func (h *Hub) broadcastPresence() {
 			listeners[f]++
 		}
 		c.mu.RUnlock()
+	}
+	for _, ms := range rooms {
+		sortMembers(ms)
 	}
 	for c := range h.clients {
 		c.mu.RLock()
