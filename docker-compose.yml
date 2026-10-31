@@ -14,10 +14,6 @@ services:
       - ./data:/data                  # users, rooms, keys: back this folder up
     environment:
       NETSPEAK_ADMIN_PASSWORD: ""     # first start only. Empty = random, printed in `docker compose logs netspeak`
-      NETSPEAK_TRUST_PROXY: "1"       # use X-Forwarded-For from your proxy (login rate limiting)
       # Prefer plain HTTP between proxy and container? Set the next line, change the port mapping
       # above to "8080:8080", and point the proxy at http://netspeak:8080
       # NETSPEAK_TLS: "off"
-    cap_drop: [ALL]
-    cap_add: [NET_BIND_SERVICE]
-    security_opt: ["no-new-privileges:true"]

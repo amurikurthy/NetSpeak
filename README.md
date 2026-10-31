@@ -25,10 +25,6 @@ services:
       - ./data:/data                  # users, rooms, keys: back this folder up
     environment:
       NETSPEAK_ADMIN_PASSWORD: ""     # first start only. Empty = random, printed in the logs
-      NETSPEAK_TRUST_PROXY: "1"       # use X-Forwarded-For from your proxy
-    cap_drop: [ALL]
-    cap_add: [NET_BIND_SERVICE]
-    security_opt: ["no-new-privileges:true"]
 ```
 
 ```bash
@@ -80,7 +76,7 @@ To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks 
 | `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
 | `NETSPEAK_PORT` | 443 (8080 if TLS off) | listen port |
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password |
-| `NETSPEAK_TRUST_PROXY` | | `1` to trust `X-Forwarded-For` (set in the compose file) |
+| `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy; set `0` if exposed directly |
 | `NETSPEAK_DATA` | /data | state directory (one JSON file + certs). Back up this folder |
 
 ## Using it

@@ -58,7 +58,7 @@ func main() {
 		}
 	}
 
-	auth := NewAuth(st, env("NETSPEAK_TRUST_PROXY", "") == "1")
+	auth := NewAuth(st, env("NETSPEAK_TRUST_PROXY", "1") == "1")
 	hub := NewHub(st, auth)
 	api := &API{st: st, auth: auth, hub: hub}
 
