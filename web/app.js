@@ -27,7 +27,7 @@ export async function api(method, url, body) {
 
 // ---------- prefs ----------
 const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, duck: 0.4, wake: false, micOpen: false,
-  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, joinAll: false, halfDuplex: true, autoFeeds: true, left: [], feedsOff: [], seeded: false, ver: 2 };
+  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, joinAll: false, feedback: true, autoFeeds: true, left: [], feedsOff: [], seeded: false, ver: 2 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
 if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
@@ -38,7 +38,7 @@ const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, 
   listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, lingerTimer = null, voice = null, wakeLock = null;
-let installEvt = null;
+let installEvt = null, lastFbToast = 0;
 const root = $('#app');
 
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });
@@ -223,9 +223,8 @@ function roomCard(r) {
   return el;
 }
 
-// Volume for a room, with the room I'm transmitting in muted so my speaker can't feed back into my mic.
-function applyRoom(id) { applyVol('room', id, prefs.halfDuplex && S.talking.has(id) ? 0 : (prefs.roomVol[id] ?? 1)); }
-function applyDuplex() { for (const r of S.rooms) applyRoom(r.id); }
+// Volume for a room. Everyone stays audible while you talk; feedback is handled on the mic path instead.
+function applyRoom(id) { applyVol('room', id, prefs.roomVol[id] ?? 1); }
 function applyVol(kind, id, v) { if (engine.ctx) engine.setVolume(kind, id, v); }
 
 function talkButton(r) {
@@ -268,7 +267,8 @@ function earbudToggle() {
 function micOpts() {
   const p = PRESETS[prefs.preset] || PRESETS.phone;
   return { channels: 1, bitrate: 32000, application: 'voip', deviceId: prefs.micId, gain: prefs.micGain,
-    ec: p.ec, ns: p.ns, agc: p.agc, hpf: p.hpf, gate: p.gate || S.calls.size > 0, gateDb: prefs.gateDb,
+    ec: p.ec, ns: p.ns, agc: p.agc, hpf: p.hpf, gate: p.gate || S.calls.size > 0, gateDb: prefs.gateDb, feedback: prefs.feedback,
+    onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
     onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
     onFrame: (seq, d) => {
       if (!ws || ws.readyState !== 1) return;
@@ -296,7 +296,7 @@ function releaseMic() {
 async function talkStart(id) {
   await engine.start(); engine.resume();
   for (const o of [...S.talking]) if (o !== id) talkStop(o);   // only ever transmit to one room
-  S.talking.add(id); S.active = id; applyDuplex(); update();
+  S.talking.add(id); S.active = id; update();
   const v = await ensureMic();
   if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
   engine.talkingNow = true; v.sending = true; S.active = id; applyGate();
@@ -305,7 +305,7 @@ async function talkStart(id) {
   send({ t: 'talk', room: id, on: true });
 }
 function talkStop(id) {
-  S.talking.delete(id); S.calls.delete(id); applyGate(); applyDuplex(); send({ t: 'talk', room: id, on: false });
+  S.talking.delete(id); S.calls.delete(id); applyGate(); send({ t: 'talk', room: id, on: false });
   if (!S.talking.size) stopSending();
   update(); releaseMic();
 }
@@ -400,6 +400,7 @@ async function settings() {
       `microphone:   ${v ? (v.track?.readyState + ' / ' + (v.track?.label || '?') + (v.track?.muted ? ' (MUTED by OS)' : '')) : 'closed'}`,
       `joined rooms: ${S.rooms.filter((r) => S.joined.has(r.id)).map((r) => r.name + (r.talk ? '' : ' (listen only)')).join(', ') || 'none'}`,
       `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
+      `feedback:     ${prefs.feedback ? 'protection on' : 'protection OFF'}${S.fb ? ` · ${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : ' · none detected'}`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
     ].join('\n');
   };
@@ -420,7 +421,7 @@ async function settings() {
     h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
     chk('Listen to ALL my rooms at once (every room is heard mixed together)', 'joinAll', () => { if (prefs.joinAll && S.connected) { prefs.left = []; ws.close(); } }),
     chk('Listen to program feeds automatically', 'autoFeeds', () => { if (prefs.autoFeeds && S.connected) { prefs.feedsOff = []; ws.close(); } }),
-    chk('Mute the room I am talking in (stops speaker feedback; turn off with earbuds if you want to hear replies while talking)', 'halfDuplex', applyDuplex),
+    chk('Automatic feedback protection (cuts howling tones on your mic; you can still hear everyone while you talk)', 'feedback', () => { voice?.setFeedback(prefs.feedback); }),
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles talk (latched) in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,

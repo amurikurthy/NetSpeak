@@ -15,6 +15,9 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - run: go vet ./... && go test ./...
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node test/feedback.test.js
   image:
     needs: test
     runs-on: ubuntu-latest

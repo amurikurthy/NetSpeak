@@ -183,7 +183,7 @@ class Capture {
   constructor(engine, o) {
     this.e = engine;
     this.o = Object.assign({ channels: 1, bitrate: 32000, application: 'voip', deviceId: '', gain: 1,
-      ec: true, ns: true, agc: true, hpf: 0, gate: false, gateDb: -55, onFrame: () => {}, onLevel: () => {} }, o);
+      ec: true, ns: true, agc: true, hpf: 0, gate: false, gateDb: -55, feedback: false, onFeedback: () => {}, onFrame: () => {}, onLevel: () => {} }, o);
     this.seq = 0; this.ts = 0; this.sending = false;
   }
 
@@ -208,7 +208,7 @@ class Capture {
     tail.connect(this.gain);
     this.node = new AudioWorkletNode(ctx, 'ns-framer', {
       numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [o.channels],
-      processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb },
+      processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb, feedback: o.feedback },
     });
     this.gain.connect(this.node);
     this.sink = ctx.createGain(); this.sink.gain.value = 0;   // keeps the graph pulled, outputs silence
@@ -227,7 +227,8 @@ class Capture {
       opus: { application: o.application, signal: o.application === 'voip' ? 'voice' : 'music', frameDuration: 20000, useinbandfec: false, usedtx: false },
     });
     this.node.port.onmessage = (m) => {
-      const { frame, level } = m.data;
+      const { frame, level, feedback } = m.data;
+      if (feedback) o.onFeedback(feedback);
       o.onLevel(level);
       if (!frame || !this.sending) return;
       if (this.enc.encodeQueueSize > 10) return;
@@ -240,6 +241,7 @@ class Capture {
   }
 
   setGain(v) { if (this.gain) this.gain.gain.value = v; }
+  setFeedback(on) { this.node?.port.postMessage({ feedback: on }); }
   setGate(on, db) { this.node?.port.postMessage({ gate: on, threshold: db }); }
   get deviceId() { return this.track?.getSettings().deviceId; }
 
