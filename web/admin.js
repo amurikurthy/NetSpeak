@@ -18,7 +18,7 @@ const tabs = ['users', 'groups', 'rooms', 'feeds', 'invites'];
 function draw() {
   const body = { users: usersTab, groups: groupsTab, rooms: roomsTab, feeds: feedsTab, invites: invitesTab }[state.tab]();
   rootEl.replaceChildren(
-    h('div', { class: 'top' }, h('div', { class: 'brand' }, 'netspeak · admin'), h('button', { onclick: ctx.back }, '← Back to intercom')),
+    h('div', { class: 'top' }, h('div', { class: 'brand' }, 'NetSpeak · admin'), h('button', { onclick: ctx.back }, '← Back to intercom')),
     h('div', { class: 'wrap' },
       h('div', { class: 'tabs' }, tabs.map((t) => h('button', { class: state.tab === t ? 'sel' : '', onclick: () => { state.tab = t; draw(); } }, t[0].toUpperCase() + t.slice(1)))),
       body));
@@ -59,7 +59,7 @@ function usersTab() {
 function userForm(u) {
   const f = { username: h('input', { type: 'text', value: u?.username || '', disabled: !!u, autocapitalize: 'none' }),
     name: h('input', { type: 'text', value: u?.displayName || '' }),
-    pw: h('input', { type: 'password', placeholder: u ? 'Leave blank to keep' : 'At least 8 characters', autocomplete: 'new-password' }),
+    pw: h('input', { type: 'password', placeholder: u ? 'Leave blank to keep' : 'Password', autocomplete: 'new-password' }),
     role: h('select', {}, h('option', { value: 'user', selected: u?.role !== 'admin' }, 'User'), h('option', { value: 'admin', selected: u?.role === 'admin' }, 'Admin (full access)')),
     dis: h('input', { type: 'checkbox', checked: !!u?.disabled }) };
   const gp = groupPicker(u?.groups || []);
@@ -144,7 +144,7 @@ function ingestInfo(f) {
 
 // ---- invites ----
 function invitesTab() {
-  return h('div', {}, h('p', { class: 'sub' }, 'Invite links let people join with just a name, no account. They get the groups you pick and are removed when the invite expires or is deleted.'),
+  return h('div', {}, h('p', { class: 'sub' }, 'Invite links let people join with just a name, no account. They get the groups you pick and stay until you delete the invite. An expiry is optional.'),
     h('button', { class: 'primary', onclick: inviteForm }, '+ New invite link'),
     D().invites.map((i) => {
       const link = `${location.origin}/join/${i.token}`;
@@ -155,7 +155,7 @@ function invitesTab() {
     }));
 }
 function inviteForm() {
-  const n = h('input', { type: 'text', placeholder: 'e.g. Visiting camera crew' }), e = h('select', {}, [[0, 'Never (guests last 7 days)'], [4, '4 hours'], [24, '24 hours'], [168, '7 days'], [720, '30 days']].map(([v, l]) => h('option', { value: v, selected: v === 24 }, l)));
+  const n = h('input', { type: 'text', placeholder: 'e.g. Visiting camera crew' }), e = h('select', {}, [[0, 'Never'], [4, '4 hours'], [24, '24 hours'], [168, '7 days'], [720, '30 days']].map(([v, l]) => h('option', { value: v }, l)));
   const m = h('input', { type: 'number', min: 0, value: 0 }), gp = groupPicker([]);
   sheet('New invite link', h('div', {}, field('Label', n), field('Expires', e), field('Max uses (0 = unlimited)', m), h('label', { class: 'f' }, 'Groups the guest joins'), gp),
     () => api('POST', '/api/admin/invites', { name: n.value, expiresHours: +e.value, maxUses: +m.value, groups: pickerGet(gp) }), 'Create');

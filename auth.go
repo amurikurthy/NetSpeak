@@ -46,7 +46,7 @@ func (a *Auth) sign(payload string) string {
 }
 
 func (a *Auth) issue(w http.ResponseWriter, r *http.Request, u *User) {
-	exp := time.Now().Add(90 * 24 * time.Hour)
+	exp := time.Now().Add(400 * 24 * time.Hour) // browsers cap cookies at ~400 days
 	if u.Guest && !u.ExpiresAt.IsZero() {
 		exp = u.ExpiresAt
 	}
@@ -212,10 +212,7 @@ func (a *Auth) handleJoin(w http.ResponseWriter, r *http.Request) {
 			return errNotFound
 		}
 		inv.Uses++
-		exp := inv.ExpiresAt
-		if exp.IsZero() {
-			exp = time.Now().Add(7 * 24 * time.Hour)
-		}
+		exp := inv.ExpiresAt // zero = guest never expires
 		user = &User{
 			ID: newID(), Username: "guest-" + newID(), DisplayName: name, Role: "user",
 			Groups: append([]string(nil), inv.Groups...), Guest: true, InviteID: inv.ID,
@@ -298,10 +295,6 @@ func (a *Auth) handleMe(w http.ResponseWriter, r *http.Request, u *User) {
 		}
 		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.OldPassword)) != nil {
 			writeErr(w, 403, "current password is wrong")
-			return
-		}
-		if len(in.NewPassword) < 8 {
-			writeErr(w, 400, "password must be at least 8 characters")
 			return
 		}
 	}

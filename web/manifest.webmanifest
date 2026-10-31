@@ -1,6 +1,6 @@
 {
-  "name": "netspeak",
-  "short_name": "netspeak",
+  "name": "NetSpeak",
+  "short_name": "NetSpeak",
   "description": "Self-hosted intercom with program feeds",
   "start_url": "/",
   "scope": "/",

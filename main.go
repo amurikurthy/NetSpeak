@@ -111,11 +111,11 @@ func main() {
 	}
 	switch mode {
 	case "off":
-		log.Printf("netspeak listening on http://:%s (TLS terminated by your reverse proxy)", port)
+		log.Printf("NetSpeak listening on http://:%s (TLS terminated by your reverse proxy)", port)
 		log.Fatal(srv.ListenAndServe())
 	default:
 		srv.TLSConfig = &tls.Config{GetCertificate: selfSigned(filepath.Join(dataDir, "certs")).get}
-		log.Printf("netspeak on https://:%s with a self-signed certificate (put your reverse proxy in front)", port)
+		log.Printf("NetSpeak on https://:%s with a self-signed certificate (put your reverse proxy in front)", port)
 	}
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 }
@@ -182,7 +182,7 @@ func (s *selfSignedCerts) get(hi *tls.ClientHelloInfo) (*tls.Certificate, error)
 	}
 	serial, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
 	t := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: name, Organization: []string{"netspeak"}},
+		SerialNumber: serial, Subject: pkix.Name{CommonName: name, Organization: []string{"NetSpeak"}},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(5, 0, 0),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,

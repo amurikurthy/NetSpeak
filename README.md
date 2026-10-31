@@ -1,4 +1,4 @@
-# netspeak
+# NetSpeak
 
 Self-hosted intercom with clean program feeds. One container, one port (**443**), no database.
 
@@ -38,7 +38,7 @@ Open the site through your reverse proxy, sign in as `admin`, and change the pas
 
 ### Reverse proxy
 
-netspeak serves HTTPS on 443 with a self-signed certificate and expects your reverse proxy to present the real one. The proxy must **pass WebSockets** (audio uses `/ws`) and **keep the original Host header** (the WebSocket origin check compares it). Browsers need HTTPS for the microphone, so the proxy's certificate is what users see.
+NetSpeak serves HTTPS on 443 with a self-signed certificate and expects your reverse proxy to present the real one. The proxy must **pass WebSockets** (audio uses `/ws`) and **keep the original Host header** (the WebSocket origin check compares it). Browsers need HTTPS for the microphone, so the proxy's certificate is what users see.
 
 Caddy:
 
@@ -81,7 +81,7 @@ To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks 
 
 ## Using it
 
-**Admin → Groups/Users/Rooms/Feeds/Invites.** Put people in groups, then grant groups access on each room or feed (Listen, Talk, Send). Guests get an invite link (`/join/…`), enter a name and land in the groups you chose; the link can expire or be limited in uses. Admins can access everything.
+**Admin → Groups/Users/Rooms/Feeds/Invites.** Put people in groups, then grant groups access on each room or feed (Listen, Talk, Send). Guests get an invite link (`/join/…`), enter a name and land in the groups you chose; invites never expire unless you set an expiry or a use limit; deleting an invite removes the guests who joined through it. Admins can access everything.
 
 **Program audio.** Either open a feed on a device with a line-in/interface and choose *Send from this device* (echo cancel, noise suppression and AGC are forced off, stereo Opus 192 kbps by default), or push from anything ffmpeg can read. Packets are relayed as-is, never re-encoded:
 

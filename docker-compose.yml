@@ -1,4 +1,4 @@
-# netspeak: one container, one port, one volume. No database, no other services.
+# NetSpeak: one container, one port, one volume. No database, no other services.
 # Put your reverse proxy in front of it (it must pass WebSockets and keep the Host header).
 #
 #   docker compose up -d

@@ -60,7 +60,7 @@ function loginView() {
     catch (x) { err.textContent = x.message; }
   };
   root.replaceChildren(h('div', { class: 'center' }, h('form', { class: 'card', onsubmit: go },
-    h('h1', {}, 'netspeak'), h('p', { class: 'sub' }, 'Sign in to your intercom'),
+    h('h1', {}, 'NetSpeak'), h('p', { class: 'sub' }, 'Sign in to your intercom'),
     h('label', { class: 'f' }, 'Username'), u, h('label', { class: 'f' }, 'Password'), p,
     err, h('button', { class: 'primary', style: 'width:100%;margin-top:8px' }, 'Sign in'))));
 }
@@ -68,7 +68,7 @@ function loginView() {
 async function joinView(token) {
   let info;
   try { info = await api('GET', '/api/invite/' + encodeURIComponent(token)); }
-  catch { root.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card' }, h('h1', {}, 'netspeak'), h('p', {}, 'This invite link is invalid or has expired.')))); return; }
+  catch { root.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card' }, h('h1', {}, 'NetSpeak'), h('p', {}, 'This invite link is invalid or has expired.')))); return; }
   const err = h('div', { class: 'err' });
   const n = h('input', { type: 'text', placeholder: 'Your name', maxlength: 40, autocomplete: 'nickname' });
   try { n.value = localStorage.getItem('ns.guestName') || ''; } catch {}
@@ -81,7 +81,7 @@ async function joinView(token) {
     } catch (x) { err.textContent = x.message; }
   };
   root.replaceChildren(h('div', { class: 'center' }, h('form', { class: 'card', onsubmit: go },
-    h('h1', {}, 'netspeak'), h('p', { class: 'sub' }, `You're invited: ${info.name}`),
+    h('h1', {}, 'NetSpeak'), h('p', { class: 'sub' }, `You're invited: ${info.name}`),
     h('label', { class: 'f' }, 'Your name'), n, err, h('button', { class: 'primary', style: 'width:100%;margin-top:8px' }, 'Join'))));
 }
 
@@ -102,7 +102,7 @@ async function appView() {
   const lv = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
   engine.vol.master = prefs.master; engine.duck = prefs.duck; engine.jitter.feed = prefs.feedBuf;
   root.replaceChildren(
-    h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, 'netspeak'),
+    h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, 'NetSpeak'),
       S.me.role === 'admin' && h('button', { class: 'ghost', onclick: () => { location.hash = '#admin'; } }, 'Admin'),
       h('button', { class: 'ghost', onclick: pocketLock }, '🔒 Pocket lock'),
       h('button', { class: 'ghost', onclick: settings }, '⚙ Settings')),
@@ -436,7 +436,7 @@ function changePassword() {
   const o = h('input', { type: 'password', autocomplete: 'current-password' }), n = h('input', { type: 'password', autocomplete: 'new-password' });
   const close = () => sheet.remove();
   const sheet = h('div', { class: 'sheet', onclick: (e) => { if (e.target === sheet) close(); } }, h('div', {},
-    h('h3', {}, 'Change password'), h('label', { class: 'f' }, 'Current password'), o, h('label', { class: 'f' }, 'New password (8+ characters)'), n,
+    h('h3', {}, 'Change password'), h('label', { class: 'f' }, 'Current password'), o, h('label', { class: 'f' }, 'New password'), n,
     h('div', { class: 'row', style: 'margin-top:16px' }, h('button', { class: 'primary', onclick: async () => { try { await api('POST', '/api/me', { oldPassword: o.value, newPassword: n.value }); toast('Password changed'); close(); } catch (e) { toast(e.message); } } }, 'Change'), h('button', { onclick: close }, 'Cancel'))));
   document.body.append(sheet);
 }
@@ -445,7 +445,7 @@ function changePassword() {
 function updateMediaSession() {
   try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
   if (!('mediaSession' in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({ title: 'Intercom live', artist: 'netspeak', artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
+  navigator.mediaSession.metadata = new MediaMetadata({ title: 'Intercom live', artist: 'NetSpeak', artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
   navigator.mediaSession.playbackState = 'playing';
   const on = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
   // Earbud click arrives as play/pause: use it as a hands-free talk toggle.

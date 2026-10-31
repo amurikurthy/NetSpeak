@@ -92,10 +92,6 @@ func (a *API) saveUser(w http.ResponseWriter, r *http.Request, me *User) {
 	if in.Role != "admin" {
 		in.Role = "user"
 	}
-	if in.Password != "" && len(in.Password) < 8 {
-		writeErr(w, 400, "password must be at least 8 characters")
-		return
-	}
 	var hash string
 	if in.Password != "" {
 		var err error
