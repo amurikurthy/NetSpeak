@@ -20,7 +20,7 @@ export class Engine {
     this.chans = new Map();    // ch -> {kind:'room'|'feed', id}
     this.gains = new Map();    // "room:id"/"feed:id" -> GainNode
     this.vol = { master: 1, mic: 1 };
-    this.jitter = { room: 0.08, feed: 0.15 };   // fixed playout buffers (seconds)
+    this.jitter = { room: 0.08, feed: 0.05 };   // fixed playout buffers (seconds)
     this.onLevel = () => {};
     this.sendFrame = () => {};
     this.captures = new Map(); // name -> Capture

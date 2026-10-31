@@ -387,6 +387,39 @@ function stopPublish(fromServer) {
   update();
 }
 
+// ----- install self-check -----
+// Walks through what a browser needs before it offers to install the app and reports what this device actually sees.
+async function installReport() {
+  const out = [], ok = (b, msg) => out.push((b ? '✓ ' : '✗ ') + msg);
+  const ua = navigator.userAgent;
+  const browser = /SamsungBrowser/.test(ua) ? 'Samsung Internet' : /Firefox|FxiOS/.test(ua) ? 'Firefox' : /EdgA|Edg\//.test(ua) ? 'Edge' : /OPR|Opera/.test(ua) ? 'Opera' : /CriOS/.test(ua) ? 'Chrome on iPhone (cannot install)' : /Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : 'unknown';
+  out.push(`browser: ${browser}${/; wv\)|FBAN|FBAV|Instagram|Line\//.test(ua) ? ' (looks like an in-app browser: open the link in Chrome itself)' : ''}`);
+  ok(isSecureContext && location.protocol === 'https:' || location.hostname === 'localhost', `trusted https (${location.protocol}//${location.host})`);
+  ok(!matchMedia('(display-mode: standalone)').matches && !navigator.standalone, 'not already running as an installed app');
+  try {
+    const r = await fetch('/manifest.webmanifest', { credentials: 'omit', cache: 'no-store' });
+    ok(r.ok, `manifest: HTTP ${r.status}, ${r.headers.get('content-type')}`);
+    const m = await r.json();
+    ok(!!(m.name || m.short_name) && !!m.start_url && ['standalone', 'fullscreen', 'minimal-ui'].includes(m.display), `manifest has name, start_url, display "${m.display}"`);
+    for (const ic of m.icons || []) {
+      try {
+        const ir = await fetch(ic.src, { credentials: 'omit', cache: 'no-store' }); const bl = await ir.blob();
+        let dims = ''; try { const bmp = await createImageBitmap(bl); dims = ` ${bmp.width}x${bmp.height}`; } catch { dims = ' (cannot decode)'; }
+        ok(ir.ok && /^image\//.test(bl.type), `icon ${ic.src}: HTTP ${ir.status}, ${bl.type}, ${bl.size} B${dims}, declared ${ic.sizes}`);
+      } catch (e) { ok(false, `icon ${ic.src}: ${e.message}`); }
+    }
+    ok((m.icons || []).some((i) => /192/.test(i.sizes)) && (m.icons || []).some((i) => /512/.test(i.sizes)), 'has 192 and 512 pixel icons');
+  } catch (e) { ok(false, 'manifest: ' + e.message); }
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    ok(!!reg && !!reg.active, `service worker: ${reg ? (reg.active ? 'active (' + reg.active.state + ')' : reg.installing ? 'still installing' : reg.waiting ? 'waiting' : 'not active') : 'not registered'}`);
+    ok(!!navigator.serviceWorker.controller, 'page is controlled by the service worker (reload once if not)');
+    const sr = await fetch('/sw.js', { cache: 'no-store' }); ok(sr.ok && /javascript/.test(sr.headers.get('content-type') || ''), `sw.js: HTTP ${sr.status}, ${sr.headers.get('content-type')}`);
+  } catch (e) { ok(false, 'service worker: ' + e.message); }
+  ok(!!installEvt, installEvt ? 'browser has offered the install prompt' : 'browser has not offered the install prompt' + (browser.startsWith('Chrome') || browser === 'Edge' ? ' (Chrome stays quiet in Incognito, or if the app is already installed: look for "Open" in the ⋮ menu)' : ' (this browser installs from its own menu instead: ⋮ or Share, then Install / Add to Home screen)'));
+  return out.join('\n');
+}
+
 // ----- settings -----
 async function settings() {
   let ins = [], outs = [];
@@ -398,6 +431,7 @@ async function settings() {
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
   const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
   const diag = h('pre', { style: 'white-space:pre-wrap' });
+  const instOut = h('pre', { style: 'white-space:pre-wrap' });
   const tick = () => {
     const st = engine.stats, v = engine.captures.get('voice');
     diag.textContent = [
@@ -426,6 +460,7 @@ async function settings() {
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles talk (latched) in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,
+    h('div', { style: 'margin:8px 0' }, h('button', { onclick: async (e) => { e.target.disabled = true; instOut.textContent = 'Checking…'; instOut.textContent = await installReport(); e.target.disabled = false; } }, 'Check why the app can\'t install')), instOut,
     h('h2', {}, 'Account'),
     h('button', { onclick: changePassword }, 'Change password'),
     installEvt && h('button', { style: 'margin-left:8px', onclick: () => { installEvt.prompt(); } }, 'Install app'),
