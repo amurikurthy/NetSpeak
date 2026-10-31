@@ -4,7 +4,7 @@
 #   docker compose logs netspeak      # shows the generated admin password on first start
 services:
   netspeak:
-    image: ghcr.io/YOUR_GITHUB_USER/netspeak:latest
+    image: ghcr.io/amurikurthy/netspeak:latest
     # build: .                       # or uncomment to build from source instead of pulling
     restart: unless-stopped
     ports:

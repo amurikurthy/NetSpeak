@@ -11,9 +11,11 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 
 ## Deploy
 
+Image: `ghcr.io/amurikurthy/netspeak:latest` (built by GitHub Actions on every push to main).
+
 ```bash
 mkdir netspeak && cd netspeak
-curl -O https://raw.githubusercontent.com/YOUR_GITHUB_USER/netspeak/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/amurikurthy/netspeak/main/docker-compose.yml
 # set NETSPEAK_DOMAIN in the file if you have a public hostname
 docker compose up -d
 docker compose logs netspeak    # first-start admin password
@@ -23,7 +25,7 @@ Or without compose:
 
 ```bash
 docker run -d --name netspeak --restart unless-stopped -p 443:443 -v netspeak:/data \
-  -e NETSPEAK_DOMAIN=intercom.example.com ghcr.io/YOUR_GITHUB_USER/netspeak:latest
+  -e NETSPEAK_DOMAIN=intercom.example.com ghcr.io/amurikurthy/netspeak:latest
 ```
 
 Open `https://your-host`, sign in as `admin`, and change the password under Settings.
