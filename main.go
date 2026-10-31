@@ -65,8 +65,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", auth.handleLogin)
 	mux.HandleFunc("POST /api/logout", auth.handleLogout)
-	mux.HandleFunc("POST /api/join", auth.handleJoin)
-	mux.HandleFunc("GET /api/invite/{token}", auth.handleInviteInfo)
 	mux.HandleFunc("GET /api/me", auth.require(auth.handleMe))
 	mux.HandleFunc("POST /api/me", auth.require(auth.handleMe))
 	mux.HandleFunc("GET /ws", hub.ServeWS)
@@ -77,11 +75,6 @@ func main() {
 
 	sub, _ := fs.Sub(webFS, "web")
 	files := http.FileServer(http.FS(sub))
-	index := func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = "/"
-		files.ServeHTTP(w, r)
-	}
-	mux.HandleFunc("GET /join/{token}", index)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/sw.js") || r.URL.Path == "/" {
 			w.Header().Set("Cache-Control", "no-cache")
@@ -90,21 +83,6 @@ func main() {
 	})
 
 	handler := secureHeaders(mux)
-	go func() {
-		for range time.Tick(time.Hour) {
-			_ = st.Update(func(d *Data) error {
-				kept := d.Users[:0]
-				for _, u := range d.Users {
-					if !(u.Guest && !u.ExpiresAt.IsZero() && time.Now().After(u.ExpiresAt)) {
-						kept = append(kept, u)
-					}
-				}
-				d.Users = kept
-				return nil
-			})
-		}
-	}()
-
 	srv := &http.Server{
 		Addr: ":" + port, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second,

@@ -44,7 +44,6 @@ if ('serviceWorker' in navigator) addEventListener('load', () => navigator.servi
 
 // ---------- boot ----------
 async function boot() {
-  if (location.pathname.startsWith('/join/')) return joinView(location.pathname.split('/')[2]);
   try { S.me = await api('GET', '/api/me'); } catch { return loginView(); }
   appView();
 }
@@ -63,26 +62,6 @@ function loginView() {
     h('h1', {}, 'NetSpeak'), h('p', { class: 'sub' }, 'Sign in to your intercom'),
     h('label', { class: 'f' }, 'Username'), u, h('label', { class: 'f' }, 'Password'), p,
     err, h('button', { class: 'primary', style: 'width:100%;margin-top:8px' }, 'Sign in'))));
-}
-
-async function joinView(token) {
-  let info;
-  try { info = await api('GET', '/api/invite/' + encodeURIComponent(token)); }
-  catch { root.replaceChildren(h('div', { class: 'center' }, h('div', { class: 'card' }, h('h1', {}, 'NetSpeak'), h('p', {}, 'This invite link is invalid or has expired.')))); return; }
-  const err = h('div', { class: 'err' });
-  const n = h('input', { type: 'text', placeholder: 'Your name', maxlength: 40, autocomplete: 'nickname' });
-  try { n.value = localStorage.getItem('ns.guestName') || ''; } catch {}
-  const go = async (e) => {
-    e.preventDefault(); err.textContent = '';
-    try {
-      S.me = await api('POST', '/api/join', { token, name: n.value });
-      try { localStorage.setItem('ns.guestName', n.value); } catch {}
-      history.replaceState(null, '', '/'); appView();
-    } catch (x) { err.textContent = x.message; }
-  };
-  root.replaceChildren(h('div', { class: 'center' }, h('form', { class: 'card', onsubmit: go },
-    h('h1', {}, 'NetSpeak'), h('p', { class: 'sub' }, `You're invited: ${info.name}`),
-    h('label', { class: 'f' }, 'Your name'), n, err, h('button', { class: 'primary', style: 'width:100%;margin-top:8px' }, 'Join'))));
 }
 
 // ---------- main view ----------
@@ -425,7 +404,7 @@ async function settings() {
     h('p', { class: 'sub' }, 'Earbud button: click toggles hands-free talk in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,
     h('h2', {}, 'Account'),
-    !S.me.guest && h('button', { onclick: changePassword }, 'Change password'),
+    h('button', { onclick: changePassword }, 'Change password'),
     installEvt && h('button', { style: 'margin-left:8px', onclick: () => { installEvt.prompt(); } }, 'Install app'),
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);

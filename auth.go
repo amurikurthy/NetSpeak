@@ -47,9 +47,6 @@ func (a *Auth) sign(payload string) string {
 
 func (a *Auth) issue(w http.ResponseWriter, r *http.Request, u *User) {
 	exp := time.Now().Add(400 * 24 * time.Hour) // browsers cap cookies at ~400 days
-	if u.Guest && !u.ExpiresAt.IsZero() {
-		exp = u.ExpiresAt
-	}
 	tok := a.sign(u.ID + "|" + strconv.Itoa(u.TokenVersion) + "|" + strconv.FormatInt(exp.Unix(), 10))
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: tok, Path: "/", Expires: exp, HttpOnly: true,
@@ -91,9 +88,6 @@ func (a *Auth) UserFrom(r *http.Request) *User {
 	a.st.View(func(d *Data) {
 		u := d.UserByID(f[0])
 		if u == nil || u.Disabled || u.TokenVersion != ver {
-			return
-		}
-		if u.Guest && !u.ExpiresAt.IsZero() && time.Now().After(u.ExpiresAt) {
 			return
 		}
 		cp := *u
@@ -151,7 +145,7 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 func publicUser(u *User) map[string]any {
 	return map[string]any{
 		"id": u.ID, "username": u.Username, "displayName": u.DisplayName,
-		"role": u.Role, "guest": u.Guest,
+		"role": u.Role,
 	}
 }
 
@@ -189,67 +183,9 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, publicUser(u))
 }
 
-func (a *Auth) handleJoin(w http.ResponseWriter, r *http.Request) {
-	ip := a.clientIP(r)
-	if a.throttled(ip, false) {
-		writeErr(w, 429, "Too many attempts")
-		return
-	}
-	var in struct{ Token, Name string }
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
-		writeErr(w, 400, "bad request")
-		return
-	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" || len(name) > 40 {
-		writeErr(w, 400, "Enter a name (max 40 characters)")
-		return
-	}
-	var user *User
-	err := a.st.Update(func(d *Data) error {
-		inv := d.InviteByToken(in.Token)
-		if inv == nil || !inv.Valid() {
-			return errNotFound
-		}
-		inv.Uses++
-		exp := inv.ExpiresAt // zero = guest never expires
-		user = &User{
-			ID: newID(), Username: "guest-" + newID(), DisplayName: name, Role: "user",
-			Groups: append([]string(nil), inv.Groups...), Guest: true, InviteID: inv.ID,
-			ExpiresAt: exp, CreatedAt: time.Now(),
-		}
-		d.Users = append(d.Users, user)
-		return nil
-	})
-	if err != nil {
-		a.throttled(ip, true)
-		writeErr(w, 400, "This invite link is invalid or has expired")
-		return
-	}
-	a.issue(w, r, user)
-	writeJSON(w, 200, publicUser(user))
-}
-
 func (a *Auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
 	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
-// handleInviteInfo lets the join page show what the invite is for.
-func (a *Auth) handleInviteInfo(w http.ResponseWriter, r *http.Request) {
-	tok := r.PathValue("token")
-	var name string
-	ok := false
-	a.st.View(func(d *Data) {
-		if i := d.InviteByToken(tok); i != nil && i.Valid() {
-			ok, name = true, i.Name
-		}
-	})
-	if !ok {
-		writeErr(w, 404, "invalid or expired invite")
-		return
-	}
-	writeJSON(w, 200, map[string]string{"name": name})
 }
 
 func (a *Auth) require(next func(http.ResponseWriter, *http.Request, *User)) http.HandlerFunc {
@@ -289,10 +225,6 @@ func (a *Auth) handleMe(w http.ResponseWriter, r *http.Request, u *User) {
 		return
 	}
 	if in.NewPassword != "" {
-		if u.Guest {
-			writeErr(w, 400, "guests have no password")
-			return
-		}
 		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.OldPassword)) != nil {
 			writeErr(w, 403, "current password is wrong")
 			return

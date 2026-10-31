@@ -458,8 +458,7 @@ func (c *Client) refresh() {
 	var feeds []map[string]any
 	perms := map[string]Perm{}
 	c.h.st.View(func(d *Data) {
-		if x := d.UserByID(c.userID); x != nil && !x.Disabled &&
-			!(x.Guest && !x.ExpiresAt.IsZero() && time.Now().After(x.ExpiresAt)) {
+		if x := d.UserByID(c.userID); x != nil && !x.Disabled {
 			cp := *x
 			u = &cp
 		}
@@ -523,7 +522,7 @@ func (c *Client) refresh() {
 		c.json(map[string]any{"t": "publish", "feed": dropPub, "on": false})
 	}
 	c.json(map[string]any{
-		"t": "state", "you": map[string]any{"c": c.id, "id": u.ID, "name": u.DisplayName, "role": u.Role, "guest": u.Guest},
+		"t": "state", "you": map[string]any{"c": c.id, "id": u.ID, "name": u.DisplayName, "role": u.Role},
 		"rooms": rooms, "feeds": feeds,
 	})
 }

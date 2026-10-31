@@ -33,8 +33,6 @@ func (a *API) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/admin/feeds/{id}", adm(a.saveFeed))
 	mux.HandleFunc("DELETE /api/admin/feeds/{id}", adm(a.delFeed))
 	mux.HandleFunc("POST /api/admin/feeds/{id}/rotate", adm(a.rotateFeed))
-	mux.HandleFunc("POST /api/admin/invites", adm(a.saveInvite))
-	mux.HandleFunc("DELETE /api/admin/invites/{id}", adm(a.delInvite))
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -67,11 +65,10 @@ func (a *API) state(w http.ResponseWriter, r *http.Request, _ *User) {
 		for _, u := range d.Users {
 			m := publicUser(u)
 			m["groups"], m["disabled"], m["online"] = u.Groups, u.Disabled, online[u.ID]
-			m["expiresAt"] = u.ExpiresAt
 			users = append(users, m)
 		}
 		writeJSON(w, 200, map[string]any{
-			"users": users, "groups": d.Groups, "rooms": d.SortedRooms(), "feeds": d.SortedFeeds(), "invites": d.Invites,
+			"users": users, "groups": d.Groups, "rooms": d.SortedRooms(), "feeds": d.SortedFeeds(),
 		})
 	})
 }
@@ -234,9 +231,6 @@ func (a *API) delGroup(w http.ResponseWriter, r *http.Request, _ *User) {
 		for _, x := range d.Feeds {
 			x.Access = strip(x.Access)
 		}
-		for _, x := range d.Invites {
-			x.Groups = filterGroups(d, x.Groups)
-		}
 		return nil
 	})
 	a.reply(w, err)
@@ -351,52 +345,5 @@ func (a *API) rotateFeed(w http.ResponseWriter, r *http.Request, _ *User) {
 		}
 		x.IngestKey = newSecret(16)
 		return nil
-	}))
-}
-
-func (a *API) saveInvite(w http.ResponseWriter, r *http.Request, _ *User) {
-	var in struct {
-		Name       string   `json:"name"`
-		Groups     []string `json:"groups"`
-		ExpiresHrs int      `json:"expiresHours"`
-		MaxUses    int      `json:"maxUses"`
-	}
-	if !decode(w, r, &in) {
-		return
-	}
-	a.reply(w, a.st.Update(func(d *Data) error {
-		inv := &Invite{
-			ID: newID(), Token: newSecret(12), Name: clean(in.Name, 40), Groups: filterGroups(d, in.Groups),
-			MaxUses: max(in.MaxUses, 0), CreatedAt: time.Now(),
-		}
-		if inv.Name == "" {
-			inv.Name = "Guest invite"
-		}
-		if in.ExpiresHrs > 0 {
-			inv.ExpiresAt = time.Now().Add(time.Duration(in.ExpiresHrs) * time.Hour)
-		}
-		d.Invites = append(d.Invites, inv)
-		return nil
-	}))
-}
-
-func (a *API) delInvite(w http.ResponseWriter, r *http.Request, _ *User) {
-	id := r.PathValue("id")
-	a.reply(w, a.st.Update(func(d *Data) error {
-		for i, x := range d.Invites {
-			if x.ID == id {
-				d.Invites = append(d.Invites[:i], d.Invites[i+1:]...)
-				// Revoke guests who joined through it.
-				kept := d.Users[:0]
-				for _, u := range d.Users {
-					if !(u.Guest && u.InviteID == id) {
-						kept = append(kept, u)
-					}
-				}
-				d.Users = kept
-				return nil
-			}
-		}
-		return errNotFound
 	}))
 }

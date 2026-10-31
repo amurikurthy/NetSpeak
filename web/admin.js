@@ -13,10 +13,10 @@ async function load() {
 }
 const D = () => state.data;
 const gname = (id) => D().groups.find((g) => g.id === id)?.name || '?';
-const tabs = ['users', 'groups', 'rooms', 'feeds', 'invites'];
+const tabs = ['users', 'groups', 'rooms', 'feeds'];
 
 function draw() {
-  const body = { users: usersTab, groups: groupsTab, rooms: roomsTab, feeds: feedsTab, invites: invitesTab }[state.tab]();
+  const body = { users: usersTab, groups: groupsTab, rooms: roomsTab, feeds: feedsTab }[state.tab]();
   rootEl.replaceChildren(
     h('div', { class: 'top' }, h('div', { class: 'brand' }, 'NetSpeak · admin'), h('button', { onclick: ctx.back }, '← Back to intercom')),
     h('div', { class: 'wrap' },
@@ -46,15 +46,14 @@ function pickerGet(el) { return el.lastChild.get(); }
 
 // ---- users ----
 function usersTab() {
-  const guests = D().users.filter((u) => u.guest), users = D().users.filter((u) => !u.guest);
-  const row = (u) => h('tr', {}, h('td', {}, h('b', {}, u.displayName), h('div', { class: 'sub' }, u.guest ? 'guest' : u.username + (u.role === 'admin' ? ' · admin' : ''))),
+  const users = D().users;
+  const row = (u) => h('tr', {}, h('td', {}, h('b', {}, u.displayName), h('div', { class: 'sub' }, u.username + (u.role === 'admin' ? ' · admin' : ''))),
     h('td', {}, u.groups.map((g) => h('span', { class: 'pill' }, gname(g)))), h('td', {}, u.online ? h('span', { class: 'badge live', style: 'background:var(--accent);color:#052e12' }, 'online') : u.disabled ? h('span', { class: 'badge' }, 'disabled') : ''),
-    h('td', {}, !u.guest && h('button', { onclick: () => userForm(u) }, 'Edit'), ' ',
+    h('td', {}, h('button', { onclick: () => userForm(u) }, 'Edit'), ' ',
       u.online ? h('button', { onclick: () => act(() => api('POST', `/api/admin/users/${u.id}/kick`), 'Disconnected') }, 'Kick') : '', ' ',
       u.id !== ctx.me.id && h('button', { class: 'danger', onclick: () => confirmDel(u.displayName, () => api('DELETE', `/api/admin/users/${u.id}`)) }, '✕')));
   return h('div', {}, h('button', { class: 'primary', onclick: () => userForm() }, '+ New user'),
-    h('table', {}, h('tbody', {}, users.map(row))),
-    guests.length > 0 && [h('h2', {}, 'Guests (from invite links)'), h('table', {}, h('tbody', {}, guests.map(row)))]);
+    h('table', {}, h('tbody', {}, users.map(row))));
 }
 function userForm(u) {
   const f = { username: h('input', { type: 'text', value: u?.username || '', disabled: !!u, autocapitalize: 'none' }),
@@ -90,7 +89,7 @@ function aclEditor(access, feed) {
     ...[...rows.keys()].filter((k) => k.startsWith('user:')).map((k) => [k, 'User: ' + (D().users.find((u) => 'user:' + u.id === k)?.displayName || '?')])];
   const redraw = () => {
     const addSel = h('select', { onchange: (e) => { if (e.target.value) { rows.set(e.target.value, { principal: e.target.value }); redraw(); } } },
-      h('option', { value: '' }, '+ Add a specific user…'), D().users.filter((u) => !u.guest && !rows.has('user:' + u.id)).map((u) => h('option', { value: 'user:' + u.id }, u.displayName)));
+      h('option', { value: '' }, '+ Add a specific user…'), D().users.filter((u) => !rows.has('user:' + u.id)).map((u) => h('option', { value: 'user:' + u.id }, u.displayName)));
     const cb = (p, k) => { const r = rows.get(p) || { principal: p }; return h('input', { type: 'checkbox', checked: !!r[k], onchange: (e) => { const x = rows.get(p) || { principal: p }; x[k] = e.target.checked; if (k === 'talk' && x.talk) x.listen = true; if (k === 'listen' && !x.listen) { x.talk = false; } rows.set(p, x); redraw(); } }); };
     wrap.replaceChildren(h('table', { class: 'acl' }, h('thead', {}, h('tr', {}, h('th', {}, 'Who'), h('th', {}, 'Listen'), !feed && h('th', {}, 'Talk'), feed && h('th', {}, 'Send'))),
       h('tbody', {}, principals().map(([p, l]) => h('tr', {}, h('td', {}, l), h('td', {}, cb(p, 'listen')), !feed && h('td', {}, cb(p, 'talk')), feed && h('td', {}, cb(p, 'source')))))), addSel);
@@ -140,23 +139,4 @@ function ingestInfo(f) {
     h('label', { class: 'f' }, 'Ingest URL (PUT/POST an Ogg/Opus stream)'), h('pre', {}, url),
     h('label', { class: 'f' }, 'From a file / any source'), h('pre', {}, cmd), h('label', { class: 'f' }, 'From a sound card (Linux example)'), h('pre', {}, cmd2),
     h('button', { class: 'danger', style: 'margin-top:12px', onclick: () => { if (confirm('Rotate the key? The old URL stops working.')) act(() => api('POST', `/api/admin/feeds/${f.id}/rotate`), 'Key rotated'); } }, 'Rotate key')), null);
-}
-
-// ---- invites ----
-function invitesTab() {
-  return h('div', {}, h('p', { class: 'sub' }, 'Invite links let people join with just a name, no account. They get the groups you pick and stay until you delete the invite. An expiry is optional.'),
-    h('button', { class: 'primary', onclick: inviteForm }, '+ New invite link'),
-    D().invites.map((i) => {
-      const link = `${location.origin}/join/${i.token}`;
-      return h('div', { class: 'card', style: 'margin-top:12px' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, i.name),
-        h('div', { class: 'sub' }, [...i.groups.map(gname), i.expiresAt && !i.expiresAt.startsWith('0001') ? 'expires ' + new Date(i.expiresAt).toLocaleString() : 'no expiry', `${i.uses}${i.maxUses ? '/' + i.maxUses : ''} used`].join(' · '))),
-        h('button', { onclick: async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch { prompt('Copy link', link); } } }, 'Copy link'),
-        h('button', { class: 'danger', onclick: () => confirmDel(i.name + ' (and the guests who used it)', () => api('DELETE', `/api/admin/invites/${i.id}`)) }, '✕')));
-    }));
-}
-function inviteForm() {
-  const n = h('input', { type: 'text', placeholder: 'e.g. Visiting camera crew' }), e = h('select', {}, [[0, 'Never'], [4, '4 hours'], [24, '24 hours'], [168, '7 days'], [720, '30 days']].map(([v, l]) => h('option', { value: v }, l)));
-  const m = h('input', { type: 'number', min: 0, value: 0 }), gp = groupPicker([]);
-  sheet('New invite link', h('div', {}, field('Label', n), field('Expires', e), field('Max uses (0 = unlimited)', m), h('label', { class: 'f' }, 'Groups the guest joins'), gp),
-    () => api('POST', '/api/admin/invites', { name: n.value, expiresHours: +e.value, maxUses: +m.value, groups: pickerGet(gp) }), 'Create');
 }

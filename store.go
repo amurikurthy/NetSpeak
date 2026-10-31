@@ -29,10 +29,8 @@ type User struct {
 	PasswordHash string    `json:"passwordHash,omitempty"`
 	Role         string    `json:"role"` // "admin" | "user"
 	Groups       []string  `json:"groups"`
-	Guest        bool      `json:"guest,omitempty"`
-	InviteID     string    `json:"inviteId,omitempty"`
+	Guest        bool      `json:"guest,omitempty"` // legacy: guest accounts from the removed invite feature are dropped on load
 	Disabled     bool      `json:"disabled,omitempty"`
-	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
 	TokenVersion int       `json:"tokenVersion"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
@@ -61,32 +59,13 @@ type Feed struct {
 	Access      []Grant `json:"access"`
 }
 
-type Invite struct {
-	ID        string    `json:"id"`
-	Token     string    `json:"token"`
-	Name      string    `json:"name"`
-	Groups    []string  `json:"groups"`
-	ExpiresAt time.Time `json:"expiresAt,omitempty"`
-	MaxUses   int       `json:"maxUses"` // 0 = unlimited
-	Uses      int       `json:"uses"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-func (i *Invite) Valid() bool {
-	if !i.ExpiresAt.IsZero() && time.Now().After(i.ExpiresAt) {
-		return false
-	}
-	return i.MaxUses == 0 || i.Uses < i.MaxUses
-}
-
 type Data struct {
-	Version int       `json:"version"`
-	Secret  string    `json:"secret"`
-	Users   []*User   `json:"users"`
-	Groups  []*Group  `json:"groups"`
-	Rooms   []*Room   `json:"rooms"`
-	Feeds   []*Feed   `json:"feeds"`
-	Invites []*Invite `json:"invites"`
+	Version int      `json:"version"`
+	Secret  string   `json:"secret"`
+	Users   []*User  `json:"users"`
+	Groups  []*Group `json:"groups"`
+	Rooms   []*Room  `json:"rooms"`
+	Feeds   []*Feed  `json:"feeds"`
 }
 
 // Store is an in-memory model persisted atomically to a single JSON file.
@@ -127,6 +106,13 @@ func OpenStore(dir string) (*Store, bool, error) {
 	if err := json.Unmarshal(b, &s.d); err != nil {
 		return nil, false, err
 	}
+	kept := s.d.Users[:0]
+	for _, u := range s.d.Users {
+		if !u.Guest {
+			kept = append(kept, u)
+		}
+	}
+	s.d.Users = kept
 	if s.d.Secret == "" {
 		s.d.Secret = newSecret(32)
 	}
@@ -227,15 +213,6 @@ func (d *Data) GroupByID(id string) *Group {
 	for _, g := range d.Groups {
 		if g.ID == id {
 			return g
-		}
-	}
-	return nil
-}
-
-func (d *Data) InviteByToken(t string) *Invite {
-	for _, i := range d.Invites {
-		if i.Token == t {
-			return i
 		}
 	}
 	return nil

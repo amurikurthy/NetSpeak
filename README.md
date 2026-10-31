@@ -4,7 +4,7 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 
 - **Rooms** with per-room push-to-talk or latch, live "who's talking", per-room volume
 - **Program feeds**: unprocessed stereo Opus (up to 256 kbps), separate volume, auto-dims while people talk
-- **Permissions**: users, groups, guest invite links; per room/feed *listen / talk / send* for everyone, groups or single users. Changes apply instantly to connected clients
+- **Permissions**: users and groups that an admin creates; per room/feed *listen / talk / send* for everyone, groups or single users. Changes apply instantly to connected clients
 - **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
 - **Noise handling** for phones: echo cancel + noise suppression + auto gain + low-cut + noise gate. Feeds bypass all of it
 - **Single port**: web app, API and audio all ride one connection (WebSocket). Nothing else to forward, works behind reverse proxies and tunnels
@@ -81,7 +81,7 @@ To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks 
 
 ## Using it
 
-**Admin → Groups/Users/Rooms/Feeds/Invites.** Put people in groups, then grant groups access on each room or feed (Listen, Talk, Send). Guests get an invite link (`/join/…`), enter a name and land in the groups you chose; invites never expire unless you set an expiry or a use limit; deleting an invite removes the guests who joined through it. Admins can access everything.
+**Admin → Users/Groups/Rooms/Feeds.** The admin creates a user account for each person, puts people in groups, then grants groups (or single users) access on each room or feed (Listen, Talk, Send). Admins can access everything.
 
 **Program audio.** Either open a feed on a device with a line-in/interface and choose *Send from this device* (echo cancel, noise suppression and AGC are forced off, stereo Opus 192 kbps by default), or push from anything ffmpeg can read. Packets are relayed as-is, never re-encoded:
 

@@ -28,18 +28,6 @@ func TestPermissions(t *testing.T) {
 	}
 }
 
-func TestInviteValid(t *testing.T) {
-	if (&Invite{ExpiresAt: time.Now().Add(-time.Minute)}).Valid() {
-		t.Fatal("expired")
-	}
-	if (&Invite{MaxUses: 1, Uses: 1}).Valid() {
-		t.Fatal("used up")
-	}
-	if !(&Invite{}).Valid() {
-		t.Fatal("unlimited should be valid")
-	}
-}
-
 func TestOpusDuration(t *testing.T) {
 	if d := opusDuration([]byte{0xfc}); d != 20*time.Millisecond {
 		t.Fatalf("got %v", d)
