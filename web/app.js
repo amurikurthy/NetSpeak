@@ -31,6 +31,9 @@ const defaults = { micId: '', spkId: '', micGain: 1, master: 1, wake: false,
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
 if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
+// Volume sliders top out at 100% (normal level, no boost). Cap anything saved from the old 150%/200% range.
+prefs.master = Math.min(1, prefs.master); prefs.micGain = Math.min(1, prefs.micGain);
+for (const m of [prefs.roomVol, prefs.feedVol]) for (const k of Object.keys(m)) m[k] = Math.min(1, m[k]);
 export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.stringify(prefs)); } catch {} };
 
 // ---------- state ----------
@@ -79,8 +82,8 @@ async function appView() {
   ui.rooms = h('div'); ui.feeds = h('div'); ui.warn = h('div');
   ui.audio = h('div', { class: 'warn', hidden: true, style: 'cursor:pointer;font-weight:600', onclick: () => enableAudio() }, '🔇 Audio is off: tap here to start listening');
   ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);
-  const mv = h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; savePrefs(); voice?.setGain(prefs.micGain); } });
-  const lv = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
+  const mv = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; savePrefs(); voice?.setGain(prefs.micGain); } });
+  const lv = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
   engine.vol.master = prefs.master;
   root.replaceChildren(
     h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, 'NetSpeak'),
@@ -199,7 +202,7 @@ function persist() { prefs.joined = [...S.joined]; prefs.listening = [...S.liste
 // ----- rooms -----
 function roomCard(r) {
   const chips = h('div', { class: 'chips' });
-  const vol = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
+  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
     oninput: (e) => { prefs.roomVol[r.id] = +e.target.value; savePrefs(); applyRoom(r.id); } });
   const sw = h('input', { type: 'checkbox', onchange: async (e) => {
     if (e.target.checked) { prefs.left = prefs.left.filter((x) => x !== r.id); S.joined.add(r.id); send({ t: 'join', room: r.id }); await engine.start(); applyRoom(r.id); }
@@ -310,7 +313,7 @@ function stopSending() { if (voice) voice.sending = false; releaseMic(); }
 // ----- feeds -----
 function feedCard(f) {
   const live = h('span', { class: 'badge' }, 'OFFLINE'), n = h('span', { class: 'sub' });
-  const vol = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.feedVol[f.id] ?? 1,
+  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.feedVol[f.id] ?? 1,
     oninput: (e) => { prefs.feedVol[f.id] = +e.target.value; savePrefs(); applyVol('feed', f.id, prefs.feedVol[f.id]); } });
   // Listener controls. Hidden while this device is the sender: the server never plays a feed back to its own sender.
   const volBox = h('div', {}, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol);
