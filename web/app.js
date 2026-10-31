@@ -96,6 +96,7 @@ async function appView() {
   cards = new Map(); sig = '';
   ui.dot = h('span', { class: 'dot' });
   ui.rooms = h('div'); ui.feeds = h('div'); ui.warn = h('div');
+  ui.audio = h('div', { class: 'warn', hidden: true, style: 'cursor:pointer;font-weight:600', onclick: () => enableAudio() }, '🔇 Audio is off: tap here to start listening');
   ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);
   const mv = h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; savePrefs(); voice?.setGain(prefs.micGain); } });
   const lv = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
@@ -105,7 +106,7 @@ async function appView() {
       S.me.role === 'admin' && h('button', { class: 'ghost', onclick: () => { location.hash = '#admin'; } }, 'Admin'),
       h('button', { class: 'ghost', onclick: pocketLock }, '🔒 Pocket lock'),
       h('button', { class: 'ghost', onclick: settings }, '⚙ Settings')),
-    h('div', { class: 'wrap' }, ui.warn, h('h2', {}, 'Rooms'), ui.rooms, h('h2', {}, 'Program feeds'), ui.feeds),
+    h('div', { class: 'wrap' }, ui.warn, ui.audio, h('h2', {}, 'Rooms'), ui.rooms, h('h2', {}, 'Program feeds'), ui.feeds),
     h('div', { class: 'bar' }, h('div', { class: 'in' },
       h('div', {}, h('label', {}, h('span', {}, 'Listening volume')), lv),
       h('div', {}, h('label', {}, h('span', {}, 'Microphone volume')), mv, ui.micRow))));
@@ -184,7 +185,24 @@ function render() {
   update();
 }
 
-function update() { for (const c of cards.values()) c(); }
+function update() { for (const c of cards.values()) c(); audioBanner(); }
+
+// Browsers only start audio after a tap/click. Rooms remembered from a previous visit are re-joined
+// automatically, so without this the room looks joined while nothing is actually playing.
+function audioNeeded() {
+  return (S.joined.size > 0 || S.listening.size > 0) && (!engine.ctx || engine.ctx.state !== 'running' || engine.el?.paused);
+}
+function audioBanner() { if (ui.audio) ui.audio.hidden = !audioNeeded(); }
+async function enableAudio() {
+  try {
+    await engine.start(); await engine.resume();
+    for (const id of S.joined) applyVol('room', id, prefs.roomVol[id] ?? 1);
+    for (const id of S.listening) applyVol('feed', id, prefs.feedVol[id] ?? 1);
+  } catch (e) { toast('Could not start audio: ' + e.message); }
+  audioBanner();
+}
+for (const ev of ['pointerup', 'keydown', 'click', 'touchend']) addEventListener(ev, () => { if (S.me && audioNeeded()) enableAudio(); }, true);
+setInterval(audioBanner, 1000);
 
 function persist() { prefs.joined = [...S.joined]; prefs.listening = [...S.listening]; savePrefs(); }
 
@@ -285,6 +303,8 @@ async function talkStart(id) {
   const v = await ensureMic();
   if (!v || !S.talking.has(id)) { if (!v) { S.talking.delete(id); update(); } return; }
   engine.talkingNow = true; v.sending = true; S.active = id; applyGate();
+  const tx0 = engine.stats.tx;
+  setTimeout(() => { if (S.talking.has(id) && engine.stats.tx === tx0) toast('Mic is open but no sound is being sent: speak up, or lower the noise gate / pick "Headset" in Settings'); }, 2500);
   send({ t: 'talk', room: id, on: true });
 }
 function talkStop(id) {
@@ -373,7 +393,21 @@ async function settings() {
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
   const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
   const testBtn = h('button', { onclick: async () => { if (!await ensureMic()) return; testBtn.textContent = 'Mic open: speak and watch the meter'; releaseMic(); } }, 'Test microphone');
-  const close = () => sheet.remove();
+  const diag = h('pre', { style: 'white-space:pre-wrap' });
+  const tick = () => {
+    const st = engine.stats, v = engine.captures.get('voice');
+    diag.textContent = [
+      `connection:   ${S.connected ? 'online' : 'OFFLINE'}`,
+      `codec:        ${supported ? 'WebCodecs Opus OK' : 'NOT SUPPORTED in this browser'}`,
+      `audio engine: ${engine.ctx ? engine.ctx.state : 'not started'}${engine.el?.paused ? ' (output paused)' : ''}`,
+      `microphone:   ${v ? (v.track?.readyState + ' / ' + (v.track?.label || '?') + (v.track?.muted ? ' (MUTED by OS)' : '')) : 'closed'}`,
+      `joined rooms: ${S.rooms.filter((r) => S.joined.has(r.id)).map((r) => r.name + (r.talk ? '' : ' (listen only)')).join(', ') || 'none'}`,
+      `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
+      `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
+    ].join('\n');
+  };
+  tick(); const dt = setInterval(tick, 500);
+  const close = () => { clearInterval(dt); sheet.remove(); };
   const sheet = h('div', { class: 'sheet', onclick: (e) => { if (e.target === sheet) close(); } }, h('div', {},
     h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Settings'), h('button', { class: 'ghost', onclick: close }, '✕')),
     h('label', { class: 'f' }, 'Your name'), h('div', { class: 'row' }, name, h('button', { onclick: async () => { try { S.me = await api('POST', '/api/me', { displayName: name.value }); toast('Saved'); location.reload(); } catch (e) { toast(e.message); } } }, 'Save')),
@@ -389,6 +423,7 @@ async function settings() {
     h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles hands-free talk in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
+    h('h2', {}, 'Diagnostics'), diag,
     h('h2', {}, 'Account'),
     !S.me.guest && h('button', { onclick: changePassword }, 'Change password'),
     installEvt && h('button', { style: 'margin-left:8px', onclick: () => { installEvt.prompt(); } }, 'Install app'),

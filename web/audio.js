@@ -22,6 +22,7 @@ export class Engine {
     this.sendFrame = () => {};
     this.captures = new Map(); // name -> Capture
     this.sinkId = '';
+    this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0 };
   }
 
   async start() {
@@ -88,6 +89,7 @@ export class Engine {
   receive(buf) {
     const dv = new DataView(buf);
     if (dv.byteLength < 10 || dv.getUint8(0) !== 1 || !this.ctx) return;
+    this.stats.rx++; this.stats.rxLast = performance.now();
     const ch = dv.getUint16(1), sender = dv.getUint16(3), seq = dv.getUint32(5);
     const ref = this.chans.get(ch);
     if (!ref) return;
@@ -107,7 +109,7 @@ export class Engine {
     const v = { next: 0, last: 0, ref };
     v.dec = new AudioDecoder({
       output: (data) => this.play(v, data, feed),
-      error: () => { try { v.dec.close(); } catch {} v.dead = true; },
+      error: () => { this.stats.decodeErr++; try { v.dec.close(); } catch {} v.dead = true; },
     });
     v.dec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: feed ? 2 : 1 });
     return v;
@@ -205,6 +207,7 @@ class Capture {
       output: (chunk) => {
         const d = new Uint8Array(chunk.byteLength);
         chunk.copyTo(d);
+        this.e.stats.tx++;
         o.onFrame(this.seq++, d);
       },
       error: () => {},
