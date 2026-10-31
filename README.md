@@ -19,14 +19,14 @@ Needs a Linux machine with Docker and port 443 reachable. Image: `ghcr.io/amurik
 curl -fsSL https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/install.sh | sh
 ```
 
-It creates `./netspeak`, asks for an optional domain, pulls the image, starts it and prints the admin login.
+It creates `./netspeak`, asks for an optional domain (written into `docker-compose.yml`), pulls the image, starts it and prints the admin login.
 
 **Or by hand (pull the image):**
 
 ```bash
 mkdir netspeak && cd netspeak
 curl -fsSLO https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/.env.example -o .env   # optional: set your domain
+nano docker-compose.yml         # optional: set NETSPEAK_DOMAIN etc. in the environment section
 docker compose up -d
 docker compose logs netspeak    # first-start admin password
 ```

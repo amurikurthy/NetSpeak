@@ -2,22 +2,28 @@
 #
 #   docker compose up -d
 #   docker compose logs netspeak      # shows the generated admin password on first start
-#
-# Settings go in a .env file next to this one (see .env.example), no YAML editing needed.
 services:
   netspeak:
-    image: ghcr.io/amurikurthy/netspeak:${NETSPEAK_VERSION:-latest}
+    image: ghcr.io/amurikurthy/netspeak:latest
     build: .                          # used by `docker compose up -d --build` from a git clone
     container_name: netspeak
     restart: unless-stopped
     ports:
       - "443:443"                     # the ONLY port. Web app, API and all audio use it.
     volumes:
-      - ./data:/data                  # users, rooms, certificates
+      - ./data:/data                  # users, rooms, certificates: back this folder up
     environment:
-      NETSPEAK_DOMAIN: ${NETSPEAK_DOMAIN:-}            # public hostname -> automatic trusted HTTPS
-      NETSPEAK_ADMIN_PASSWORD: ${NETSPEAK_ADMIN_PASSWORD:-}
-      NETSPEAK_EMAIL: ${NETSPEAK_EMAIL:-}
+      # Public hostname pointing at this server -> automatic trusted HTTPS (Let's Encrypt, port 443 only).
+      # Leave empty for LAN use with a self-signed certificate.
+      NETSPEAK_DOMAIN: ""
+      # Initial admin password (first start only). Empty = random, printed in `docker compose logs netspeak`.
+      NETSPEAK_ADMIN_PASSWORD: ""
+      # Contact email for Let's Encrypt expiry notices (optional).
+      NETSPEAK_EMAIL: ""
+      # Behind your own reverse proxy instead? Set NETSPEAK_TLS: "off" (listens on 8080 inside the
+      # container, so also change the port mapping to "443:8080") and NETSPEAK_TRUST_PROXY: "1".
+      # NETSPEAK_TLS: "off"
+      # NETSPEAK_TRUST_PROXY: "1"
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
     security_opt: ["no-new-privileges:true"]
