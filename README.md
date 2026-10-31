@@ -11,44 +11,34 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 
 ## Deploy
 
-Needs a Linux machine with Docker and port 443 reachable. Image: `ghcr.io/amurikurthy/netspeak:latest`, built by GitHub Actions on every push to `main` (amd64 + arm64, so Raspberry Pi works).
+Needs a Linux machine with Docker. Save this as `docker-compose.yml` and run `docker compose up -d`:
 
-**One line:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/install.sh | sh
+```yaml
+services:
+  netspeak:
+    image: ghcr.io/amurikurthy/netspeak:latest
+    container_name: netspeak
+    restart: unless-stopped
+    ports:
+      - "443:443"                     # HTTPS with a self-signed cert; your reverse proxy terminates the real one
+    volumes:
+      - ./data:/data                  # users, rooms, keys: back this folder up
+    environment:
+      NETSPEAK_ADMIN_PASSWORD: ""     # first start only. Empty = random, printed in the logs
+      NETSPEAK_TRUST_PROXY: "1"       # use X-Forwarded-For from your proxy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
 ```
 
-It creates `./netspeak`, pulls the image, starts it and prints the admin login. No configuration needed.
-
-**Or by hand (pull the image):**
-
 ```bash
-mkdir netspeak && cd netspeak
-curl -fsSLO https://raw.githubusercontent.com/amurikurthy/NetSpeak/main/docker-compose.yml
 docker compose up -d
 docker compose logs netspeak    # first-start admin password
 ```
 
-**Or build from source:**
-
-```bash
-git clone https://github.com/amurikurthy/NetSpeak && cd NetSpeak
-docker compose up -d --build
-```
+Open the site through your reverse proxy, sign in as `admin`, and change the password under Settings. The image is built for amd64 and arm64 (Raspberry Pi works) by GitHub Actions on every push to `main`.
 
 **Update:** `docker compose pull && docker compose up -d` (your data in `./data` is kept).
-
-**No compose:**
-
-```bash
-docker run -d --name netspeak --restart unless-stopped -p 443:443 -v netspeak:/data \
-  ghcr.io/amurikurthy/netspeak:latest
-```
-
-Open `https://your-host`, sign in as `admin`, and change the password under Settings.
-
-> First time only: GitHub publishes the image as private. In the repo, open Packages → netspeak → Package settings → Change visibility → Public so `docker pull` works without logging in.
 
 ### Reverse proxy
 

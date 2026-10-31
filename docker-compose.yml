@@ -6,7 +6,6 @@
 services:
   netspeak:
     image: ghcr.io/amurikurthy/netspeak:latest
-    build: .                          # used by `docker compose up -d --build` from a git clone
     container_name: netspeak
     restart: unless-stopped
     ports:
