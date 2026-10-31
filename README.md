@@ -3,6 +3,7 @@
 Self-hosted intercom with clean program feeds. One container, one port (**443**), no database.
 
 - **Rooms** with per-room push-to-talk or latch, live "who's talking", per-room volume
+- **Synchronised program feed**: the server stamps every program packet with its clock, each device measures its offset from that clock, and everyone plays each packet at stamp + a fixed delay (250 ms by default), so all listeners hear the same sound at the same moment. Rooms are not delayed
 - **Program feeds**: stereo Opus at 192 kbps with a compressor and limiter at the sending end, so levels stay even and never clip. Listeners just get a volume slider
 - **Permissions**: users created by the admin, assigned straight to rooms and feeds with *listen / talk / send*. Changes apply instantly to connected clients
 - **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
@@ -77,6 +78,7 @@ To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks 
 | `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
 | `NETSPEAK_PORT` | 443 (8080 if TLS off) | listen port |
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password |
+| `NETSPEAK_FEED_DELAY_MS` | 250 | fixed delay every listener adds to program audio so all devices stay in sync. Must exceed your slowest listener's network delay (50 to 2000) |
 | `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy; set `0` if exposed directly |
 | `NETSPEAK_DATA` | /data | state directory (one JSON file + certs). Back up this folder |
 

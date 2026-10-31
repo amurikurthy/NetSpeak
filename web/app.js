@@ -40,6 +40,7 @@ export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.str
 const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, joined: new Set(), talking: new Set(),
   listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
+let syncTimer = null;
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, voice = null, micPromise = null, micError = '', wakeLock = null;
 let installEvt = null, lastFbToast = 0, swState = 'not started';
 const root = $('#app');
@@ -108,7 +109,7 @@ function connect() {
   if (ws) { ws.onclose = null; try { ws.close(); } catch {} }
   const w = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   w.binaryType = 'arraybuffer';
-  w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); };
+  w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); startClockSync(); };
   w.onmessage = (e) => {
     lastRx = Date.now();
     if (typeof e.data !== 'string') return engine.receive(e.data);
@@ -129,6 +130,14 @@ function connect() {
     send({ t: 'ping' });
   }, 15000);
 }
+// Measure this device's clock against the server's: a quick burst, then every 5 s. Used to play the program
+// feed at the same instant as every other listener.
+function startClockSync() {
+  clearInterval(syncTimer);
+  const ping = () => send({ t: 'sync', c: performance.now() });
+  let n = 0; ping();
+  syncTimer = setInterval(() => { ping(); if (++n === 8) { clearInterval(syncTimer); syncTimer = setInterval(ping, 5000); } }, 150);
+}
 const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
 function setConn(on) { S.connected = on; ui.dot?.classList.toggle('on', on); }
 
@@ -142,6 +151,7 @@ function onMsg(m) {
   switch (m.t) {
     case 'state': {
       const rooms = m.rooms || [], feeds = m.feeds || [];   // a user with no access gets empty lists, never null
+      if (m.feedDelayMs) engine.feedDelayMs = m.feedDelayMs;
       S.rooms = rooms; S.feeds = feeds; S.c = m.you.c; S.me = { ...S.me, displayName: m.you.name, role: m.you.role };
       engine.registerChannels(rooms, feeds);
       const ids = new Set(rooms.map((r) => r.id)), fids = new Set(feeds.map((f) => f.id));
@@ -164,6 +174,7 @@ function onMsg(m) {
       if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
       break;
     }
+    case 'sync': engine.clock.add(m.c, m.s, performance.now()); break;
     case 'presence': S.presence = m; update(); break;
     case 'publish': if (!m.on && S.publishing === m.feed) stopPublish(true); break;
     case 'error': toast(m.msg); break;
@@ -444,6 +455,7 @@ async function settings() {
       `joined rooms: ${S.rooms.filter((r) => S.joined.has(r.id)).map((r) => r.name + (r.talk ? '' : ' (listen only)')).join(', ') || 'none'}`,
       `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
       `feedback:     ${prefs.feedback ? 'protection on' : 'protection OFF'}${S.fb ? ` · ${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : ' · none detected'}`,
+      `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
     ].join('\n');
   };

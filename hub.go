@@ -20,7 +20,10 @@ import (
 //	server -> client: [0x01][chan u16][sender u16][seq u32][opus packet]
 //
 // Control traffic is JSON text frames.
-const frameAudio = 1
+const (
+	frameAudio     = 1 // room voice: [1][chan u16][sender u16][seq u32][opus]
+	frameFeedAudio = 2 // program feed: [2][chan u16][sender u16][seq u32][server stamp us u64][opus]
+)
 
 type chanRef struct {
 	feed bool
@@ -31,6 +34,7 @@ type feedState struct {
 	source string
 	last   time.Time
 	seq    uint32
+	clock  feedClock
 }
 
 type outMsg struct {
@@ -67,7 +71,9 @@ type Hub struct {
 	refs    map[uint16]chanRef
 	nextH   uint16
 	feeds   map[string]*feedState
-	dirty   atomic.Bool
+
+	feedDelayMs int // every listener plays program audio this long after its server stamp
+	dirty       atomic.Bool
 }
 
 func NewHub(st *Store, auth *Auth) *Hub {
@@ -235,12 +241,17 @@ func (c *Client) readLoop() {
 			continue
 		}
 		var m struct {
-			T    string `json:"t"`
-			Room string `json:"room"`
-			Feed string `json:"feed"`
-			On   bool   `json:"on"`
+			T    string  `json:"t"`
+			Room string  `json:"room"`
+			Feed string  `json:"feed"`
+			On   bool    `json:"on"`
+			C    float64 `json:"c"`
 		}
 		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m.T == "sync" { // clock sync: echo the client's timestamp with the server's own
+			c.json(map[string]any{"t": "sync", "c": m.C, "s": float64(time.Now().UnixMicro()) / 1000})
 			continue
 		}
 		c.control(m.T, m.Room, m.Feed, m.On)
@@ -354,19 +365,22 @@ func (h *Hub) feedPacket(feedID string, pkt []byte) {
 	}
 	fs.seq++
 	seq := fs.seq
-	fs.last = time.Now()
+	now := time.Now()
+	fs.last = now
+	stamp := fs.clock.stamp(now.UnixMicro(), opusDuration(pkt).Microseconds())
 	h.mu.Unlock()
-	h.fanoutFeed(feedID, 0, seq, pkt, nil)
+	h.fanoutFeed(feedID, 0, seq, stamp, pkt, nil)
 }
 
-func (h *Hub) fanoutFeed(feedID string, sender uint16, seq uint32, pkt []byte, except *Client) {
+func (h *Hub) fanoutFeed(feedID string, sender uint16, seq uint32, stampUs int64, pkt []byte, except *Client) {
 	ch := h.handle(true, feedID)
-	out := make([]byte, 9+len(pkt))
-	out[0] = frameAudio
+	out := make([]byte, 17+len(pkt))
+	out[0] = frameFeedAudio
 	binary.BigEndian.PutUint16(out[1:], ch)
 	binary.BigEndian.PutUint16(out[3:], sender)
 	binary.BigEndian.PutUint32(out[5:], seq)
-	copy(out[9:], pkt)
+	binary.BigEndian.PutUint64(out[9:], uint64(stampUs))
+	copy(out[17:], pkt)
 	m := outMsg{websocket.BinaryMessage, out}
 	h.mu.RLock()
 	for c := range h.clients {
@@ -402,12 +416,18 @@ func (h *Hub) route(c *Client, data []byte) {
 		if !ok {
 			return
 		}
+		var stamp int64
 		h.mu.Lock()
 		if fs := h.feeds[ref.id]; fs != nil && fs.source == "ws:"+itoa(c.id) {
-			fs.last = time.Now()
+			now := time.Now()
+			fs.last = now
+			stamp = fs.clock.stamp(now.UnixMicro(), opusDuration(data[7:]).Microseconds())
 		}
 		h.mu.Unlock()
-		h.fanoutFeed(ref.id, c.id, binary.BigEndian.Uint32(data[3:7]), data[7:], c)
+		if stamp == 0 {
+			return
+		}
+		h.fanoutFeed(ref.id, c.id, binary.BigEndian.Uint32(data[3:7]), stamp, data[7:], c)
 		return
 	}
 	c.mu.RLock()
@@ -523,7 +543,7 @@ func (c *Client) refresh() {
 		c.json(map[string]any{"t": "publish", "feed": dropPub, "on": false})
 	}
 	c.json(map[string]any{
-		"t": "state", "you": map[string]any{"c": c.id, "id": u.ID, "name": u.DisplayName, "role": u.Role},
+		"t": "state", "feedDelayMs": c.h.feedDelayMs, "you": map[string]any{"c": c.id, "id": u.ID, "name": u.DisplayName, "role": u.Role},
 		"rooms": rooms, "feeds": feeds,
 	})
 }

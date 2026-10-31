@@ -1,7 +1,7 @@
 // Minimal service worker: makes the app installable and launchable offline.
 // Live traffic (API, WebSocket, ingest) is never cached.
 const CACHE = 'netspeak-v1';
-const SHELL = ['/', '/style.css', '/app.js', '/audio.js', '/admin.js', '/worklet.js', '/icons/icon.svg'];
+const SHELL = ['/', '/style.css', '/app.js', '/audio.js', '/syncplay.js', '/admin.js', '/worklet.js', '/icons/icon.svg'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });

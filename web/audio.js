@@ -1,12 +1,14 @@
+import { ClockSync, SyncPlayout, stretch } from './syncplay.js';
+
 // Audio engine: Opus over the app WebSocket, Web Audio mixing, mic capture.
-// One second of near-silence (random +/-1 LSB, about -90 dB) as a WAV blob, so the browser sees real media playing.
+// One second of exact digital silence as a WAV blob, so the browser sees real media playing. (It must be true
+// silence: even faint noise in a looping clip can be heard as a hiss on some phones.)
 function silentClipUrl() {
   const rate = 8000, n = rate, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
   const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
   str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true);
   v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
   v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, n * 2, true);
-  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.random() < 0.5 ? -1 : 1, true);
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
@@ -25,7 +27,9 @@ export class Engine {
     this.sendFrame = () => {};
     this.captures = new Map(); // name -> Capture
     this.sinkId = '';
-    this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0 };
+    this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0, syncDrops: 0, syncCorr: 0 };
+    this.clock = new ClockSync();   // this device's clock vs the server's
+    this.feedDelayMs = 250;         // set by the server: every device plays program audio this long after its stamp
   }
 
   // One-time setup. Safe to call any time, with or without a user gesture; concurrent calls share it.
@@ -102,7 +106,10 @@ export class Engine {
   // ---- receive ----
   receive(buf) {
     const dv = new DataView(buf);
-    if (dv.byteLength < 10 || dv.getUint8(0) !== 1 || !this.ctx) return;
+    const type = dv.byteLength > 0 ? dv.getUint8(0) : 0;
+    // 1 = room voice [1][chan u16][sender u16][seq u32][opus]; 2 = program feed, same plus a u64 server stamp (us)
+    const hdr = type === 2 ? 17 : 9;
+    if ((type !== 1 && type !== 2) || dv.byteLength <= hdr || !this.ctx) return;
     this.stats.rx++; this.stats.rxLast = performance.now();
     const ch = dv.getUint16(1), sender = dv.getUint16(3), seq = dv.getUint32(5);
     const ref = this.chans.get(ch);
@@ -111,15 +118,16 @@ export class Engine {
     let v = this.voices.get(key);
     if (!v) { v = this.makeVoice(ref); this.voices.set(key, v); }
     v.last = performance.now();
+    const timestamp = type === 2 ? Number(dv.getBigUint64(9)) : seq * 20000;   // feed: the stamp rides through the decoder
     try {
-      v.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: seq * 20000, data: new Uint8Array(buf, 9) }));
+      v.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp, data: new Uint8Array(buf, hdr) }));
     } catch (e) { /* decoder closed; recreated on next frame */ this.voices.delete(key); }
   }
 
   makeVoice(ref) {
     const ctx = this.ctx;
     const feed = ref.kind === 'feed';
-    const v = { next: 0, last: 0, ref };
+    const v = { next: 0, last: 0, ref, sp: feed ? new SyncPlayout(48000) : null };
     v.dec = new AudioDecoder({
       output: (data) => this.play(v, data, feed),
       error: () => { this.stats.decodeErr++; try { v.dec.close(); } catch {} v.dead = true; },
@@ -128,25 +136,46 @@ export class Engine {
     return v;
   }
 
+  // Audio-clock time at which the server-clock instant sMs should sound on this device.
+  serverToCtx(sMs) {
+    const ot = this.ctx.getOutputTimestamp ? this.ctx.getOutputTimestamp() : null;
+    const ok = ot && ot.performanceTime > 0 && ot.contextTime > 0;
+    const ctxRef = ok ? ot.contextTime : this.ctx.currentTime, perfRef = ok ? ot.performanceTime : performance.now();
+    return ctxRef + (sMs - this.clock.offset - perfRef) / 1000;
+  }
+
   play(v, data, feed) {
     const ctx = this.ctx;
     const ch = data.numberOfChannels, n = data.numberOfFrames;
-    const ab = ctx.createBuffer(ch, n, 48000);
+    const planes = [];
     for (let c = 0; c < ch; c++) {
       const tmp = new Float32Array(n);
       data.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
-      ab.copyToChannel(tmp, c);
+      planes.push(tmp);
     }
+    const stampUs = data.timestamp;
     data.close();
+    const now = ctx.currentTime;
+    let when, slip = 0;
+    if (feed && this.clock.ready && v.sp) {
+      // Synchronised: sound this chunk exactly feedDelayMs after its server stamp, like every other listener.
+      const r = v.sp.plan(this.serverToCtx(stampUs / 1000 + this.feedDelayMs), now, n);
+      this.stats.syncCorr = (this.stats.syncCorr || 0) + (r.slip ? 1 : 0);
+      if (r.drop) { this.stats.syncDrops++; return; }   // too late to play in sync: skip it
+      when = r.when; slip = r.slip;
+    } else {
+      // Not synchronised yet (first moments after connecting) or a room voice: simple low-delay queue.
+      const target = this.jitter[feed ? 'feed' : 'room'];
+      if (v.next < now + 0.01 || v.next > now + target * 4 + 0.3) v.next = now + target;   // resync when we underrun or drift far ahead
+      when = v.next; v.next += n / 48000;
+    }
+    const m = n + slip;
+    const ab = ctx.createBuffer(ch, m, 48000);
+    for (let c = 0; c < ch; c++) ab.copyToChannel(slip ? stretch(planes[c], m) : planes[c], c);
     const src = ctx.createBufferSource();
     src.buffer = ab;
     src.connect(this.gainFor(v.ref.kind, v.ref.id));
-    const now = ctx.currentTime;
-    const target = this.jitter[feed ? 'feed' : 'room'];
-    // Resync when we underrun or drift too far ahead (keeps latency bounded).
-    if (v.next < now + 0.01 || v.next > now + target * 4 + 0.3) v.next = now + target;
-    src.start(v.next);
-    v.next += n / 48000;
+    src.start(when);
   }
 
   housekeeping() {
