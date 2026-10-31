@@ -6,7 +6,8 @@
 <title>NetSpeak</title>
 <meta name="theme-color" content="#0b0d12">
 <meta name="description" content="Self-hosted intercom with program feeds">
-<link rel="manifest" href="/manifest.webmanifest">
+<!-- use-credentials: send cookies / basic-auth with the manifest request. Without it a proxy that requires a login blocks the manifest and the app cannot be installed. -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">

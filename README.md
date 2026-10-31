@@ -8,7 +8,7 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 - **Permissions**: users created by the admin, assigned straight to rooms and feeds with *listen / talk / send*. Changes apply instantly to connected clients
 - **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
 - **Feedback protection**: an automatic suppressor finds howling tones on your mic and cuts just that frequency, so you can still hear everyone while you talk (and talk over each other). Earbuds remain the real cure for two devices in one room
-- **Voice mic processing**: noise suppression with a gentle low-cut, plus automatic feedback suppression. No browser echo cancellation (it forces Android into phone-call audio mode, with a separate call volume), so use earbuds or a headset. No auto gain, no gate. Program feeds bypass all of it
+- **Voice mic processing**: noise suppression with a gentle low-cut, a built-in software echo canceller that learns from what the device is playing, and automatic feedback suppression. The browser's own echo cancellation is off because it forces Android into phone-call audio mode (a separate call volume). Earbuds or a headset are still the best protection. No auto gain, no gate. Program feeds bypass all of it
 - **Single port**: web app, API and audio all ride one connection (WebSocket). Nothing else to forward, works behind reverse proxies and tunnels
 
 ## Deploy
@@ -68,6 +68,8 @@ location / {
 ```
 
 Traefik: add the service with `scheme: https` and a `serversTransport` with `insecureSkipVerify: true`.
+
+**Behind a login (Pangolin, Authelia, Cloudflare Access, basic auth).** The app is installable as long as the proxy lets three things through: `/manifest.webmanifest`, `/sw.js` and `/icons/`. The page asks the browser to send your login cookie with the manifest request (`crossorigin="use-credentials"`), which is enough for most setups. If installing still fails, add a rule that skips authentication for those paths (in Pangolin: a resource rule allowing them), then check Settings → Diagnostics → "Check why the app can't install".
 
 To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks plain HTTP on 8080 (map `8080:8080` and proxy to `http://netspeak:8080`). Opening the container directly without a proxy also works: you get a browser warning once.
 

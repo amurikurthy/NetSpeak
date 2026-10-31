@@ -208,7 +208,7 @@ class Capture {
   constructor(engine, o) {
     this.e = engine;
     this.o = Object.assign({ channels: 1, bitrate: 32000, application: 'voip', deviceId: '', gain: 1,
-      ec: true, ns: true, agc: true, hpf: 0, gate: false, gateDb: -55, feedback: false, compressor: false, onFeedback: () => {}, onFrame: () => {}, onLevel: () => {} }, o);
+      ec: true, ns: true, agc: true, hpf: 0, gate: false, gateDb: -55, feedback: false, aec: false, compressor: false, onAec: () => {}, onFeedback: () => {}, onFrame: () => {}, onLevel: () => {} }, o);
     this.seq = 0; this.ts = 0; this.sending = false;
   }
 
@@ -243,10 +243,13 @@ class Capture {
       tail.connect(this.comp); this.comp.connect(this.lim); tail = this.lim;
     }
     this.node = new AudioWorkletNode(ctx, 'ns-framer', {
-      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [o.channels],
-      processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb, feedback: o.feedback },
+      numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [o.channels],
+      processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb, feedback: o.feedback, aec: o.aec },
     });
     tail.connect(this.node);
+    // Echo cancellation: what this device is playing is the reference (input 1), so the mic can be cleaned of it
+    // in software, without the phone's own echo cancellation (which switches Android into call mode).
+    if (o.aec) e.master.connect(this.node, 0, 1);
     this.sink = ctx.createGain(); this.sink.gain.value = 0;   // keeps the graph pulled, outputs silence
     this.node.connect(this.sink); this.sink.connect(ctx.destination);
     this.enc = new AudioEncoder({
@@ -263,8 +266,9 @@ class Capture {
       opus: { application: o.application, signal: o.application === 'voip' ? 'voice' : 'music', frameDuration: 20000, useinbandfec: false, usedtx: false },
     });
     this.node.port.onmessage = (m) => {
-      const { frame, level, feedback } = m.data;
+      const { frame, level, feedback, aec } = m.data;
       if (feedback) o.onFeedback(feedback);
+      if (aec !== undefined) o.onAec(aec);
       o.onLevel(level);
       if (!frame || !this.sending) return;
       if (this.enc.encodeQueueSize > 10) return;
@@ -283,6 +287,7 @@ class Capture {
 
   async close() {
     this.sending = false;
+    try { this.e.master.disconnect(this.node); } catch {}
     try { this.node.port.onmessage = null; this.node.disconnect(); this.sink.disconnect(); } catch {}
     try { this.src.disconnect(); } catch {}
     try { this.stream.getTracks().forEach((t) => t.stop()); } catch {}

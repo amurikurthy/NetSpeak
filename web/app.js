@@ -283,9 +283,10 @@ function earbudToggle() {
 function micOpts() {
   return { channels: 1, bitrate: 32000, application: 'voip', deviceId: prefs.micId, gain: prefs.micGain,
     // Browser echo cancellation is OFF on purpose: on Android it switches the whole phone into "call" audio mode
-    // (a separate call volume slider, wrong routing). Noise suppression is plain software, and howling is
-    // handled by the feedback suppressor in the mic worklet.
-    ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback,
+    // (a separate call volume slider, wrong routing). Echo is removed by our own software canceller in the mic
+    // worklet (aec: it learns from what this device is playing), and howling by the feedback suppressor.
+    ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback, aec: true,
+    onAec: (db) => { S.aecDb = db; },
     onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
     onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; vadFrame(l); },
     onFrame: (seq, d) => {
@@ -430,8 +431,17 @@ async function installReport() {
   ok(isSecureContext && location.protocol === 'https:' || location.hostname === 'localhost', `trusted https (${location.protocol}//${location.host})`);
   ok(!matchMedia('(display-mode: standalone)').matches && !navigator.standalone, 'not already running as an installed app');
   try {
-    const r = await fetch('/manifest.webmanifest', { credentials: 'omit', cache: 'no-store' });
-    ok(r.ok, `manifest: HTTP ${r.status}, ${r.headers.get('content-type')}`);
+    // Browsers fetch the manifest with or without cookies depending on the page; check both, because a proxy that
+    // demands a login (basic auth, Authelia, Cloudflare Access...) will refuse the one without.
+    const plain = await fetch('/manifest.webmanifest', { credentials: 'omit', cache: 'no-store' }).catch((e) => ({ ok: false, status: 'network error: ' + e.message, headers: new Headers(), url: '' }));
+    const authed = await fetch('/manifest.webmanifest', { credentials: 'include', cache: 'no-store' }).catch(() => null);
+    const note = (r) => r && r.redirected ? ` (redirected to ${new URL(r.url).host + new URL(r.url).pathname})` : '';
+    ok(plain.ok, `manifest fetched without cookies: HTTP ${plain.status}, ${plain.headers.get('content-type')}${note(plain)}`);
+    if (authed) ok(authed.ok, `manifest fetched with cookies: HTTP ${authed.status}, ${authed.headers.get('content-type')}${note(authed)}`);
+    if (!plain.ok && authed && authed.ok) out.push('   -> your proxy only serves it to logged-in requests; this version sends cookies with the manifest, so reload twice and retry');
+    if (!plain.ok && !(authed && authed.ok)) out.push('   -> your proxy or CDN is blocking or redirecting /manifest.webmanifest: allow that path (and /sw.js and /icons/) without a login');
+    const r = authed && authed.ok ? authed : plain;
+    if (!r.ok) throw new Error('manifest could not be loaded');
     const m = await r.json();
     ok(!!(m.name || m.short_name) && !!m.start_url && ['standalone', 'fullscreen', 'minimal-ui'].includes(m.display), `manifest has name, start_url, display "${m.display}"`);
     for (const ic of m.icons || []) {
@@ -476,6 +486,7 @@ async function settings() {
       `microphone:   ${v ? (v.track?.readyState + ' / ' + (v.track?.label || '?') + (v.track?.muted ? ' (MUTED by OS)' : '')) : 'closed'}`,
       `joined rooms: ${S.rooms.filter((r) => S.joined.has(r.id)).map((r) => r.name + (r.talk ? '' : ' (listen only)')).join(', ') || 'none'}`,
       `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
+      `echo cancel:  ${S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
       `feedback:     ${prefs.feedback ? 'protection on' : 'protection OFF'}${S.fb ? ` · ${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : ' · none detected'}`,
       `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
