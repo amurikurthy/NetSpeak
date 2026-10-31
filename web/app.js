@@ -26,7 +26,7 @@ export async function api(method, url, body) {
 }
 
 // ---------- prefs ----------
-const defaults = { micId: '', spkId: '', micGain: 1, master: 1, wake: false, micOpen: false,
+const defaults = { micId: '', spkId: '', micGain: 1, master: 1, wake: false,
   roomVol: {}, feedVol: {}, joined: [], listening: [], feedGain: 1, feedback: true, left: [], feedsOff: [], seeded: false, ver: 2 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
@@ -288,8 +288,8 @@ async function ensureMic() {
 }
 function releaseMic() {
   clearTimeout(lingerTimer);
-  if (prefs.micOpen || S.talking.size) return;
-  lingerTimer = setTimeout(() => { if (!S.talking.size && !prefs.micOpen) { engine.stopCapture('voice'); voice = null; if (ui.mic) ui.mic.style.width = 0; } }, 8000);
+  if (S.talking.size) return;
+  lingerTimer = setTimeout(() => { if (!S.talking.size) { engine.stopCapture('voice'); voice = null; if (ui.mic) ui.mic.style.width = 0; } }, 8000);
 }
 async function talkStart(id) {
   await engine.start(); engine.resume();
@@ -407,7 +407,6 @@ async function settings() {
     h('label', { class: 'f' }, 'Your name'), h('div', { class: 'row' }, name, h('button', { onclick: async () => { try { S.me = await api('POST', '/api/me', { displayName: name.value }); toast('Saved'); location.reload(); } catch (e) { toast(e.message); } } }, 'Save')),
     h('h2', {}, 'Microphone'),
     h('label', { class: 'f' }, 'Input device' + (labeled ? '' : ' (talk once to list names)')), mic, h('div', { style: 'margin-top:10px' }, testBtn),
-    chk('Keep microphone open between talks (faster push-to-talk)', 'micOpen', () => { micOpenChanged(); }),
     h('h2', {}, 'Listening'),
     outs.length && h('div', {}, h('label', { class: 'f' }, 'Output device'), spk),
     chk('Automatic feedback protection (cuts howling tones on your mic; you can still hear everyone while you talk)', 'feedback', () => { voice?.setFeedback(prefs.feedback); }),
@@ -420,8 +419,7 @@ async function settings() {
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);
 }
-function micOpenChanged() { if (prefs.micOpen) ensureMic(); else releaseMic(); }
-async function reopenMic() { if (voice) { const was = voice.sending; await engine.stopCapture('voice'); voice = null; if (was || prefs.micOpen) { const v = await ensureMic(); if (v) v.sending = was; } } }
+async function reopenMic() { if (voice) { const was = voice.sending; await engine.stopCapture('voice'); voice = null; if (was) { const v = await ensureMic(); if (v) v.sending = was; } } }
 function changePassword() {
   const o = h('input', { type: 'password', autocomplete: 'current-password' }), n = h('input', { type: 'password', autocomplete: 'new-password' });
   const close = () => sheet.remove();
