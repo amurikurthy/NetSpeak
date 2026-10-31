@@ -21,5 +21,5 @@ while [ $i -lt 30 ]; do
 done
 docker compose logs netspeak 2>&1 | grep -E "Sign in as|created user|netspeak (on|https)" || true
 echo
-echo "netspeak is running. Open https://<this-server's-hostname-or-IP>"
+echo "netspeak is running on port 443 (self-signed). Point your reverse proxy at it."
 echo "Settings live in $(pwd)/docker-compose.yml (environment section). Update: docker compose pull && docker compose up -d"

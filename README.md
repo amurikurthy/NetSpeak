@@ -7,7 +7,7 @@ Self-hosted intercom with clean program feeds. One container, one port (**443**)
 - **Permissions**: users, groups, guest invite links; per room/feed *listen / talk / send* for everyone, groups or single users. Changes apply instantly to connected clients
 - **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
 - **Noise handling** for phones: echo cancel + noise suppression + auto gain + low-cut + noise gate. Feeds bypass all of it
-- **Single port**: web app, API and audio all ride one TLS connection (WebSocket). Nothing else to forward, works behind strict firewalls, reverse proxies and tunnels
+- **Single port**: web app, API and audio all ride one connection (WebSocket). Nothing else to forward, works behind reverse proxies and tunnels
 
 ## Deploy
 
@@ -50,28 +50,47 @@ Open `https://your-host`, sign in as `admin`, and change the password under Sett
 
 > First time only: GitHub publishes the image as private. In the repo, open Packages → netspeak → Package settings → Change visibility → Public so `docker pull` works without logging in.
 
-### HTTPS (required for the microphone)
+### Reverse proxy
 
-Zero configuration. On each connection netspeak looks at the hostname the browser used:
+netspeak serves HTTPS on 443 with a self-signed certificate and expects your reverse proxy to present the real one. The proxy must **pass WebSockets** (audio uses `/ws`) and **keep the original Host header** (the WebSocket origin check compares it). Browsers need HTTPS for the microphone, so the proxy's certificate is what users see.
 
-| You open | You get |
-|---|---|
-| `https://any-name-pointing-here.example.com` | a trusted Let's Encrypt certificate, fetched automatically on the first visit (a few seconds, validated over port 443 only, no port 80) |
-| an IP address, `box.local`, `localhost` | a self-signed certificate (one browser warning; installing as an app may be limited) |
-| behind Caddy/Traefik/nginx/Cloudflare Tunnel | set `NETSPEAK_TLS: "off"` (listens on 8080) and `NETSPEAK_TRUST_PROXY: "1"`; the proxy must pass WebSockets |
+Caddy:
 
-For a trusted certificate you only need a DNS record for any name pointing at the server's public IP and port 443 reachable from the internet. Setting `NETSPEAK_DOMAIN` is optional and locks the server to that one hostname. Certificate requests are rate-limited so scanners can't exhaust Let's Encrypt limits.
+```
+intercom.example.com {
+    reverse_proxy https://netspeak:443 {
+        transport http { tls_insecure_skip_verify }
+    }
+}
+```
+
+nginx:
+
+```nginx
+location / {
+    proxy_pass https://netspeak:443;
+    proxy_ssl_verify off;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_read_timeout 1h;
+}
+```
+
+Traefik: add the service with `scheme: https` and a `serversTransport` with `insecureSkipVerify: true`.
+
+To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks plain HTTP on 8080 (map `8080:8080` and proxy to `http://netspeak:8080`). Opening the container directly without a proxy also works: you get a browser warning once.
 
 ### Environment
 
 | Variable | Default | |
 |---|---|---|
-| `NETSPEAK_DOMAIN` | | optional: only this hostname may get a certificate |
-| `NETSPEAK_TLS` | auto | `auto` (Let's Encrypt + self-signed fallback), `selfsigned`, `off` |
-| `NETSPEAK_PORT` | 443 (8080 if TLS off) | |
+| `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
+| `NETSPEAK_PORT` | 443 (8080 if TLS off) | listen port |
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password |
-| `NETSPEAK_EMAIL` | | Let's Encrypt contact |
-| `NETSPEAK_TRUST_PROXY` | | `1` to trust `X-Forwarded-For` for login rate limiting |
+| `NETSPEAK_TRUST_PROXY` | | `1` to trust `X-Forwarded-For` (set in the compose file) |
 | `NETSPEAK_DATA` | /data | state directory (one JSON file + certs). Back up this folder |
 
 ## Using it
