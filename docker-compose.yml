@@ -1,0 +1,22 @@
+# netspeak: one container, one port (443), one volume. No database, no other services.
+#
+#   docker compose up -d
+#   docker compose logs netspeak      # shows the generated admin password on first start
+services:
+  netspeak:
+    image: ghcr.io/YOUR_GITHUB_USER/netspeak:latest
+    # build: .                       # or uncomment to build from source instead of pulling
+    restart: unless-stopped
+    ports:
+      - "443:443"                    # the ONLY port. Web app, API and all audio use it.
+    volumes:
+      - ./data:/data                 # users, rooms, certificates
+    environment:
+      # Public hostname -> automatic trusted HTTPS (Let's Encrypt over port 443, no port 80 needed).
+      # Leave empty for a LAN-only self-signed certificate.
+      NETSPEAK_DOMAIN: ""
+      # NETSPEAK_ADMIN_PASSWORD: ""  # optional; otherwise one is generated and printed in the log
+      # NETSPEAK_EMAIL: ""           # optional Let's Encrypt contact
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
