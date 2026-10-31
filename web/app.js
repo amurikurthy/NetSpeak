@@ -27,7 +27,7 @@ export async function api(method, url, body) {
 
 // ---------- prefs ----------
 const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, duck: 0.4, wake: false, micOpen: false,
-  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25 };
+  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, autoJoin: true, autoFeeds: true, left: [], feedsOff: [] };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.stringify(prefs)); } catch {} };
 
@@ -134,18 +134,26 @@ document.addEventListener('visibilitychange', () => {
 function onMsg(m) {
   switch (m.t) {
     case 'state': {
-      S.rooms = m.rooms; S.feeds = m.feeds; S.c = m.you.c; S.me = { ...S.me, displayName: m.you.name, role: m.you.role };
-      engine.registerChannels(m.rooms, m.feeds);
-      const ids = new Set(m.rooms.map((r) => r.id));
-      // (re)join remembered rooms and feeds
-      for (const id of prefs.joined) if (ids.has(id) && !S.joined.has(id)) { S.joined.add(id); }
+      const rooms = m.rooms || [], feeds = m.feeds || [];   // a user with no access gets empty lists, never null
+      S.rooms = rooms; S.feeds = feeds; S.c = m.you.c; S.me = { ...S.me, displayName: m.you.name, role: m.you.role };
+      engine.registerChannels(rooms, feeds);
+      const ids = new Set(rooms.map((r) => r.id)), fids = new Set(feeds.map((f) => f.id));
+      // Rooms: remembered ones, plus (by default) every room this user can hear except those they left on purpose.
+      for (const id of prefs.joined) if (ids.has(id)) S.joined.add(id);
+      if (prefs.autoJoin) for (const id of ids) if (!prefs.left.includes(id)) S.joined.add(id);
       for (const id of [...S.joined]) { if (ids.has(id)) send({ t: 'join', room: id }); else S.joined.delete(id); }
-      const fids = new Set(m.feeds.map((f) => f.id));
       for (const id of prefs.listening) if (fids.has(id)) S.listening.add(id);
+      if (prefs.autoFeeds) for (const f of feeds) if (f.listen && !prefs.feedsOff.includes(f.id)) S.listening.add(f.id);
       for (const id of [...S.listening]) { if (fids.has(id)) send({ t: 'listen', feed: id, on: true }); else S.listening.delete(id); }
-      if (S.publishing && !fids.has(S.publishing)) S.publishing = null;
+      // Drop anything that was deleted or lost its permission while we were using it.
+      for (const id of [...S.talking]) { const r = rooms.find((x) => x.id === id); if (!r || !r.talk || !S.joined.has(id)) talkStop(id); }
+      for (const id of [...S.calls]) if (!S.joined.has(id)) S.calls.delete(id);
+      if (S.active && !ids.has(S.active)) S.active = null;
+      if (S.publishing && !fids.has(S.publishing)) stopPublish(false);
+      persist();
       render();
-      for (const id of [...S.calls]) { if (S.joined.has(id) && !S.talking.has(id)) talkStart(id); else if (!S.joined.has(id)) S.calls.delete(id); }
+      for (const id of [...S.calls]) { if (!S.talking.has(id)) talkStart(id); }
+      if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
       break;
     }
     case 'presence': S.presence = m; update(); break;
@@ -171,6 +179,7 @@ function update() { for (const c of cards.values()) c(); audioBanner(); }
 function audioNeeded() {
   return (S.joined.size > 0 || S.listening.size > 0) && (!engine.ctx || engine.ctx.state !== 'running' || engine.el?.paused);
 }
+engine.onState = () => audioBanner();
 function audioBanner() { if (ui.audio) ui.audio.hidden = !audioNeeded(); }
 async function enableAudio() {
   try {
@@ -191,8 +200,8 @@ function roomCard(r) {
   const vol = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
     oninput: (e) => { prefs.roomVol[r.id] = +e.target.value; savePrefs(); applyVol('room', r.id, prefs.roomVol[r.id]); } });
   const sw = h('input', { type: 'checkbox', onchange: async (e) => {
-    if (e.target.checked) { await engine.start(); engine.resume(); S.joined.add(r.id); send({ t: 'join', room: r.id }); applyVol('room', r.id, prefs.roomVol[r.id] ?? 1); }
-    else { if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); }
+    if (e.target.checked) { prefs.left = prefs.left.filter((x) => x !== r.id); S.joined.add(r.id); send({ t: 'join', room: r.id }); await engine.start(); applyVol('room', r.id, prefs.roomVol[r.id] ?? 1); }
+    else { if (!prefs.left.includes(r.id)) prefs.left.push(r.id); if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); }
     persist(); update();
   } });
   const btn = r.talk ? talkButton(r) : null;
@@ -300,8 +309,8 @@ function feedCard(f) {
   const vol = h('input', { type: 'range', min: 0, max: 1.5, step: 0.01, value: prefs.feedVol[f.id] ?? 1,
     oninput: (e) => { prefs.feedVol[f.id] = +e.target.value; savePrefs(); applyVol('feed', f.id, prefs.feedVol[f.id]); } });
   const play = h('button', { class: 'primary', onclick: async () => {
-    if (S.listening.has(f.id)) { S.listening.delete(f.id); send({ t: 'listen', feed: f.id, on: false }); }
-    else { await engine.start(); engine.resume(); S.listening.add(f.id); send({ t: 'listen', feed: f.id, on: true }); applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1); }
+    if (S.listening.has(f.id)) { if (!prefs.feedsOff.includes(f.id)) prefs.feedsOff.push(f.id); S.listening.delete(f.id); send({ t: 'listen', feed: f.id, on: false }); }
+    else { prefs.feedsOff = prefs.feedsOff.filter((x) => x !== f.id); S.listening.add(f.id); send({ t: 'listen', feed: f.id, on: true }); await engine.start(); applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1); }
     persist(); update();
   } });
   const src = f.source ? h('button', { onclick: () => publishDialog(f) }, 'Send from this device') : null;
@@ -400,6 +409,8 @@ async function settings() {
     outs.length && h('div', {}, h('label', { class: 'f' }, 'Output device'), spk),
     h('label', { class: 'f' }, 'Lower program while people talk'), duck,
     h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
+    chk('Join all my rooms automatically', 'autoJoin', () => { if (prefs.autoJoin && S.connected) { prefs.left = []; ws.close(); } }),
+    chk('Listen to program feeds automatically', 'autoFeeds', () => { if (prefs.autoFeeds && S.connected) { prefs.feedsOff = []; ws.close(); } }),
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles hands-free talk in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,

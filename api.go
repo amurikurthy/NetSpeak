@@ -23,9 +23,6 @@ func (a *API) routes(mux *http.ServeMux) {
 		a.hub.kickUser(r.PathValue("id"))
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
-	mux.HandleFunc("POST /api/admin/groups", adm(a.saveGroup))
-	mux.HandleFunc("PUT /api/admin/groups/{id}", adm(a.saveGroup))
-	mux.HandleFunc("DELETE /api/admin/groups/{id}", adm(a.delGroup))
 	mux.HandleFunc("POST /api/admin/rooms", adm(a.saveRoom))
 	mux.HandleFunc("PUT /api/admin/rooms/{id}", adm(a.saveRoom))
 	mux.HandleFunc("DELETE /api/admin/rooms/{id}", adm(a.delRoom))
@@ -64,23 +61,32 @@ func (a *API) state(w http.ResponseWriter, r *http.Request, _ *User) {
 		users := make([]map[string]any, 0, len(d.Users))
 		for _, u := range d.Users {
 			m := publicUser(u)
-			m["groups"], m["disabled"], m["online"] = u.Groups, u.Disabled, online[u.ID]
+			m["disabled"], m["online"] = u.Disabled, online[u.ID]
 			users = append(users, m)
 		}
 		writeJSON(w, 200, map[string]any{
-			"users": users, "groups": d.Groups, "rooms": d.SortedRooms(), "feeds": d.SortedFeeds(),
+			"users": users, "rooms": d.SortedRooms(), "feeds": d.SortedFeeds(),
 		})
 	})
 }
 
 func (a *API) saveUser(w http.ResponseWriter, r *http.Request, me *User) {
 	var in struct {
-		Username    string   `json:"username"`
-		DisplayName string   `json:"displayName"`
-		Password    string   `json:"password"`
-		Role        string   `json:"role"`
-		Groups      []string `json:"groups"`
-		Disabled    bool     `json:"disabled"`
+		Username    string `json:"username"`
+		DisplayName string `json:"displayName"`
+		Password    string `json:"password"`
+		Role        string `json:"role"`
+		// Optional: this user's access per room / feed, keyed by id.
+		Rooms map[string]struct {
+			Listen bool `json:"listen"`
+			Talk   bool `json:"talk"`
+		} `json:"rooms"`
+		Feeds map[string]struct {
+			Listen bool `json:"listen"`
+			Source bool `json:"source"`
+		} `json:"feeds"`
+		HasAccess bool `json:"hasAccess"`
+		Disabled  bool `json:"disabled"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -119,7 +125,30 @@ func (a *API) saveUser(w http.ResponseWriter, r *http.Request, me *User) {
 		if u.DisplayName == "" {
 			u.DisplayName = u.Username
 		}
-		u.Role, u.Groups, u.Disabled = in.Role, filterGroups(d, in.Groups), in.Disabled
+		u.Role, u.Disabled = in.Role, in.Disabled
+		if in.HasAccess {
+			who := "user:" + u.ID
+			set := func(gr []Grant, g Grant) []Grant {
+				out := []Grant{}
+				for _, x := range gr {
+					if x.Principal != who {
+						out = append(out, x)
+					}
+				}
+				if g.Listen || g.Talk || g.Source {
+					out = append(out, g)
+				}
+				return out
+			}
+			for _, r := range d.Rooms {
+				a := in.Rooms[r.ID]
+				r.Access = set(r.Access, Grant{Principal: who, Listen: a.Listen || a.Talk, Talk: a.Talk})
+			}
+			for _, f := range d.Feeds {
+				a := in.Feeds[f.ID]
+				f.Access = set(f.Access, Grant{Principal: who, Listen: a.Listen || a.Source, Source: a.Source})
+			}
+		}
 		if hash != "" {
 			u.PasswordHash = hash
 			u.TokenVersion++
@@ -127,16 +156,6 @@ func (a *API) saveUser(w http.ResponseWriter, r *http.Request, me *User) {
 		return nil
 	})
 	a.reply(w, err)
-}
-
-func filterGroups(d *Data, ids []string) []string {
-	out := []string{}
-	for _, g := range ids {
-		if d.GroupByID(g) != nil {
-			out = append(out, g)
-		}
-	}
-	return out
 }
 
 type errMsg string
@@ -168,6 +187,21 @@ func (a *API) delUser(w http.ResponseWriter, r *http.Request, me *User) {
 		for i, u := range d.Users {
 			if u.ID == id {
 				d.Users = append(d.Users[:i], d.Users[i+1:]...)
+				strip := func(gr []Grant) []Grant {
+					out := []Grant{}
+					for _, g := range gr {
+						if g.Principal != "user:"+id {
+							out = append(out, g)
+						}
+					}
+					return out
+				}
+				for _, x := range d.Rooms {
+					x.Access = strip(x.Access)
+				}
+				for _, x := range d.Feeds {
+					x.Access = strip(x.Access)
+				}
 				return nil
 			}
 		}
@@ -176,71 +210,10 @@ func (a *API) delUser(w http.ResponseWriter, r *http.Request, me *User) {
 	a.reply(w, err)
 }
 
-func (a *API) saveGroup(w http.ResponseWriter, r *http.Request, _ *User) {
-	var in Group
-	if !decode(w, r, &in) {
-		return
-	}
-	id := r.PathValue("id")
-	err := a.st.Update(func(d *Data) error {
-		name := clean(in.Name, 40)
-		if name == "" {
-			return errMsg("name required")
-		}
-		var g *Group
-		if id == "" {
-			g = &Group{ID: newID()}
-			d.Groups = append(d.Groups, g)
-		} else if g = d.GroupByID(id); g == nil {
-			return errNotFound
-		}
-		g.Name, g.Color = name, validColor(in.Color)
-		return nil
-	})
-	a.reply(w, err)
-}
-
-func (a *API) delGroup(w http.ResponseWriter, r *http.Request, _ *User) {
-	id := r.PathValue("id")
-	err := a.st.Update(func(d *Data) error {
-		idx := -1
-		for i, g := range d.Groups {
-			if g.ID == id {
-				idx = i
-			}
-		}
-		if idx < 0 {
-			return errNotFound
-		}
-		d.Groups = append(d.Groups[:idx], d.Groups[idx+1:]...)
-		strip := func(gr []Grant) []Grant {
-			out := gr[:0]
-			for _, g := range gr {
-				if g.Principal != "group:"+id {
-					out = append(out, g)
-				}
-			}
-			return out
-		}
-		for _, u := range d.Users {
-			u.Groups = filterGroups(d, u.Groups)
-		}
-		for _, x := range d.Rooms {
-			x.Access = strip(x.Access)
-		}
-		for _, x := range d.Feeds {
-			x.Access = strip(x.Access)
-		}
-		return nil
-	})
-	a.reply(w, err)
-}
-
 func cleanGrants(d *Data, in []Grant, feed bool) []Grant {
 	out := []Grant{}
 	for _, g := range in {
 		ok := g.Principal == "everyone" ||
-			(strings.HasPrefix(g.Principal, "group:") && d.GroupByID(g.Principal[6:]) != nil) ||
 			(strings.HasPrefix(g.Principal, "user:") && d.UserByID(g.Principal[5:]) != nil)
 		if !ok {
 			continue

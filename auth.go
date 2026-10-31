@@ -91,7 +91,6 @@ func (a *Auth) UserFrom(r *http.Request) *User {
 			return
 		}
 		cp := *u
-		cp.Groups = append([]string(nil), u.Groups...)
 		out = &cp
 	})
 	return out

@@ -454,8 +454,8 @@ func (h *Hub) refreshAll() {
 // allowed, and sends the client its visible rooms/feeds.
 func (c *Client) refresh() {
 	var u *User
-	var rooms []map[string]any
-	var feeds []map[string]any
+	rooms := []map[string]any{}
+	feeds := []map[string]any{}
 	perms := map[string]Perm{}
 	c.h.st.View(func(d *Data) {
 		if x := d.UserByID(c.userID); x != nil && !x.Disabled {
@@ -482,7 +482,7 @@ func (c *Client) refresh() {
 			}
 			perms["f:"+f.ID] = p
 			feeds = append(feeds, map[string]any{
-				"id": f.ID, "name": f.Name, "description": f.Description, "source": p.Source,
+				"id": f.ID, "name": f.Name, "description": f.Description, "source": p.Source, "listen": p.Listen,
 			})
 		}
 	})

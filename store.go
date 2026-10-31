@@ -14,7 +14,7 @@ import (
 )
 
 // Grant gives a principal access to a room or feed.
-// Principal is "everyone", "group:<id>" or "user:<id>".
+// Principal is "everyone" or "user:<id>".
 type Grant struct {
 	Principal string `json:"principal"`
 	Listen    bool   `json:"listen"`
@@ -27,18 +27,11 @@ type User struct {
 	Username     string    `json:"username"`
 	DisplayName  string    `json:"displayName"`
 	PasswordHash string    `json:"passwordHash,omitempty"`
-	Role         string    `json:"role"` // "admin" | "user"
-	Groups       []string  `json:"groups"`
+	Role         string    `json:"role"`            // "admin" | "user"
 	Guest        bool      `json:"guest,omitempty"` // legacy: guest accounts from the removed invite feature are dropped on load
 	Disabled     bool      `json:"disabled,omitempty"`
 	TokenVersion int       `json:"tokenVersion"`
 	CreatedAt    time.Time `json:"createdAt"`
-}
-
-type Group struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Color string `json:"color"`
 }
 
 type Room struct {
@@ -60,12 +53,11 @@ type Feed struct {
 }
 
 type Data struct {
-	Version int      `json:"version"`
-	Secret  string   `json:"secret"`
-	Users   []*User  `json:"users"`
-	Groups  []*Group `json:"groups"`
-	Rooms   []*Room  `json:"rooms"`
-	Feeds   []*Feed  `json:"feeds"`
+	Version int     `json:"version"`
+	Secret  string  `json:"secret"`
+	Users   []*User `json:"users"`
+	Rooms   []*Room `json:"rooms"`
+	Feeds   []*Feed `json:"feeds"`
 }
 
 // Store is an in-memory model persisted atomically to a single JSON file.
@@ -116,7 +108,50 @@ func OpenStore(dir string) (*Store, bool, error) {
 	if s.d.Secret == "" {
 		s.d.Secret = newSecret(32)
 	}
+	s.d.normalize()
+	// Older versions had groups: fold group access into per-user access.
+	var legacy struct {
+		Users []struct {
+			ID     string   `json:"id"`
+			Groups []string `json:"groups"`
+		} `json:"users"`
+	}
+	if json.Unmarshal(b, &legacy) == nil {
+		members := map[string][]string{}
+		for _, u := range legacy.Users {
+			for _, g := range u.Groups {
+				members[g] = append(members[g], u.ID)
+			}
+		}
+		if s.d.migrateGroups(members) || strings.Contains(string(b), `"groups"`) {
+			s.d.normalize()
+			_ = s.save()
+		}
+	}
 	return s, false, nil
+}
+
+// normalize makes sure no list is nil, so an empty list is always `[]` in JSON, never `null`.
+func (d *Data) normalize() {
+	if d.Users == nil {
+		d.Users = []*User{}
+	}
+	if d.Rooms == nil {
+		d.Rooms = []*Room{}
+	}
+	if d.Feeds == nil {
+		d.Feeds = []*Feed{}
+	}
+	for _, r := range d.Rooms {
+		if r.Access == nil {
+			r.Access = []Grant{}
+		}
+	}
+	for _, f := range d.Feeds {
+		if f.Access == nil {
+			f.Access = []Grant{}
+		}
+	}
 }
 
 // save must be called with mu held (write).
@@ -149,6 +184,7 @@ func (s *Store) Update(fn func(d *Data) error) error {
 		s.mu.Unlock()
 		return err
 	}
+	s.d.normalize()
 	err := s.save()
 	cb := s.onChange
 	s.mu.Unlock()
@@ -209,17 +245,8 @@ func (d *Data) FeedByID(id string) *Feed {
 	return nil
 }
 
-func (d *Data) GroupByID(id string) *Group {
-	for _, g := range d.Groups {
-		if g.ID == id {
-			return g
-		}
-	}
-	return nil
-}
-
 func (d *Data) SortedRooms() []*Room {
-	out := append([]*Room(nil), d.Rooms...)
+	out := append([]*Room{}, d.Rooms...)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Order != out[j].Order {
 			return out[i].Order < out[j].Order
@@ -230,7 +257,7 @@ func (d *Data) SortedRooms() []*Room {
 }
 
 func (d *Data) SortedFeeds() []*Feed {
-	out := append([]*Feed(nil), d.Feeds...)
+	out := append([]*Feed{}, d.Feeds...)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Order != out[j].Order {
 			return out[i].Order < out[j].Order
@@ -254,13 +281,6 @@ func grantMatches(g Grant, u *User) bool {
 		return true
 	case strings.HasPrefix(g.Principal, "user:"):
 		return g.Principal[5:] == u.ID
-	case strings.HasPrefix(g.Principal, "group:"):
-		gid := g.Principal[6:]
-		for _, x := range u.Groups {
-			if x == gid {
-				return true
-			}
-		}
 	}
 	return false
 }
@@ -283,32 +303,61 @@ func effective(grants []Grant, u *User) Perm {
 func (r *Room) PermFor(u *User) Perm { return effective(r.Access, u) }
 func (f *Feed) PermFor(u *User) Perm { return effective(f.Access, u) }
 
-// Seed creates a sensible starting configuration on first boot.
+// Seed creates a sensible starting configuration on first boot. The starter rooms are open to
+// every user; restrict them per user under Admin.
 func (d *Data) Seed(adminHash string) {
-	now := time.Now()
-	crew := &Group{ID: newID(), Name: "Crew", Color: "#3b82f6"}
-	prod := &Group{ID: newID(), Name: "Production", Color: "#f59e0b"}
-	d.Groups = []*Group{prod, crew}
+	all := []Grant{{Principal: "everyone", Listen: true, Talk: true}}
 	d.Users = []*User{{
 		ID: newID(), Username: "admin", DisplayName: "Admin", PasswordHash: adminHash,
-		Role: "admin", Groups: []string{prod.ID}, CreatedAt: now,
+		Role: "admin", CreatedAt: time.Now(),
 	}}
 	d.Rooms = []*Room{
-		{ID: newID(), Name: "Production", Color: "#ef4444", Order: 1, Access: []Grant{
-			{Principal: "group:" + prod.ID, Listen: true, Talk: true},
-			{Principal: "group:" + crew.ID, Listen: true, Talk: true},
-		}},
-		{ID: newID(), Name: "Camera", Color: "#22c55e", Order: 2, Access: []Grant{
-			{Principal: "group:" + prod.ID, Listen: true, Talk: true},
-			{Principal: "group:" + crew.ID, Listen: true, Talk: true},
-		}},
-		{ID: newID(), Name: "Director", Color: "#a855f7", Order: 3, Access: []Grant{
-			{Principal: "group:" + prod.ID, Listen: true, Talk: true},
-			{Principal: "group:" + crew.ID, Listen: true},
-		}},
+		{ID: newID(), Name: "Production", Color: "#ef4444", Order: 1, Access: append([]Grant{}, all...)},
+		{ID: newID(), Name: "Camera", Color: "#22c55e", Order: 2, Access: append([]Grant{}, all...)},
+		{ID: newID(), Name: "Director", Color: "#a855f7", Order: 3, Access: append([]Grant{}, all...)},
 	}
 	d.Feeds = []*Feed{{
 		ID: newID(), Name: "Program", Description: "Main program audio", Order: 1, IngestKey: newSecret(16),
 		Access: []Grant{{Principal: "everyone", Listen: true}},
 	}}
+}
+
+// migrateGroups converts access granted to groups (older versions) into per-user access.
+// members maps group id -> user ids. Reports whether anything changed.
+func (d *Data) migrateGroups(members map[string][]string) bool {
+	changed := false
+	fix := func(in []Grant) []Grant {
+		idx := map[string]int{}
+		out := []Grant{}
+		add := func(g Grant) {
+			if i, ok := idx[g.Principal]; ok {
+				out[i].Listen = out[i].Listen || g.Listen
+				out[i].Talk = out[i].Talk || g.Talk
+				out[i].Source = out[i].Source || g.Source
+				return
+			}
+			idx[g.Principal] = len(out)
+			out = append(out, g)
+		}
+		for _, g := range in {
+			if strings.HasPrefix(g.Principal, "group:") {
+				changed = true
+				for _, uid := range members[g.Principal[6:]] {
+					n := g
+					n.Principal = "user:" + uid
+					add(n)
+				}
+				continue
+			}
+			add(g)
+		}
+		return out
+	}
+	for _, r := range d.Rooms {
+		r.Access = fix(r.Access)
+	}
+	for _, f := range d.Feeds {
+		f.Access = fix(f.Access)
+	}
+	return changed
 }

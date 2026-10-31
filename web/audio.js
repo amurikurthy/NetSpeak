@@ -25,9 +25,16 @@ export class Engine {
     this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0 };
   }
 
-  async start() {
-    if (this.ctx) { if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {}); return; }
+  // One-time setup. Safe to call any time, with or without a user gesture; concurrent calls share it.
+  init() {
+    if (!this._init) this._init = this._setup().catch((e) => { this._init = null; this.ctx = null; throw e; });
+    return this._init;
+  }
+  async start() { await this.init(); await this.resume(); }
+
+  async _setup() {
     const ctx = this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+    ctx.onstatechange = () => this.onState && this.onState();
     this.master = ctx.createGain();
     this.comms = ctx.createGain();
     this.program = ctx.createGain();
@@ -39,7 +46,7 @@ export class Engine {
     this.el = new Audio();
     this.el.srcObject = dest.stream;
     this.el.setAttribute('playsinline', '');
-    await this.el.play().catch(() => {});
+    this.el.play().catch(() => {});
     if (this.sinkId && this.el.setSinkId) this.el.setSinkId(this.sinkId).catch(() => {});
     await ctx.audioWorklet.addModule('/worklet.js');
     this.master.gain.value = this.vol.master;
@@ -47,10 +54,13 @@ export class Engine {
     setInterval(() => this.duckTick(), 100);
   }
 
+  // Starts playback if the browser allows it. Without a user gesture (and outside an installed app)
+  // browsers keep audio blocked, so never wait on it for long.
   async resume() {
     if (!this.ctx) return;
-    if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {});
-    if (this.el && this.el.paused) await this.el.play().catch(() => {});
+    const soft = (p) => Promise.race([Promise.resolve(p).catch(() => {}), new Promise((r) => setTimeout(r, 1500))]);
+    if (this.ctx.state !== 'running') await soft(this.ctx.resume());
+    if (this.el && this.el.paused) await soft(this.el.play());
   }
 
   async setSink(id) {
