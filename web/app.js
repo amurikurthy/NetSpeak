@@ -27,8 +27,10 @@ export async function api(method, url, body) {
 
 // ---------- prefs ----------
 const defaults = { preset: 'phone', micId: '', spkId: '', micGain: 1, master: 1, duck: 0.4, wake: false, micOpen: false,
-  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, autoJoin: true, autoFeeds: true, left: [], feedsOff: [] };
+  gateDb: -52, roomVol: {}, feedVol: {}, joined: [], listening: [], feedBuf: 0.25, joinAll: false, autoFeeds: true, left: [], feedsOff: [], seeded: false, ver: 2 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
+// v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
+if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
 export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.stringify(prefs)); } catch {} };
 
 // ---------- state ----------
@@ -140,7 +142,8 @@ function onMsg(m) {
       const ids = new Set(rooms.map((r) => r.id)), fids = new Set(feeds.map((f) => f.id));
       // Rooms: remembered ones, plus (by default) every room this user can hear except those they left on purpose.
       for (const id of prefs.joined) if (ids.has(id)) S.joined.add(id);
-      if (prefs.autoJoin) for (const id of ids) if (!prefs.left.includes(id)) S.joined.add(id);
+      if (prefs.joinAll) { for (const id of ids) if (!prefs.left.includes(id)) S.joined.add(id); }
+      else if (!prefs.seeded && rooms.length) { S.joined.add((rooms.find((r) => r.talk) || rooms[0]).id); prefs.seeded = true; }   // first visit: just one room
       for (const id of [...S.joined]) { if (ids.has(id)) send({ t: 'join', room: id }); else S.joined.delete(id); }
       for (const id of prefs.listening) if (fids.has(id)) S.listening.add(id);
       if (prefs.autoFeeds) for (const f of feeds) if (f.listen && !prefs.feedsOff.includes(f.id)) S.listening.add(f.id);
@@ -409,7 +412,7 @@ async function settings() {
     outs.length && h('div', {}, h('label', { class: 'f' }, 'Output device'), spk),
     h('label', { class: 'f' }, 'Lower program while people talk'), duck,
     h('label', { class: 'f' }, 'Program buffer (higher = more robust on bad networks)'), buf,
-    chk('Join all my rooms automatically', 'autoJoin', () => { if (prefs.autoJoin && S.connected) { prefs.left = []; ws.close(); } }),
+    chk('Listen to ALL my rooms at once (every room is heard mixed together)', 'joinAll', () => { if (prefs.joinAll && S.connected) { prefs.left = []; ws.close(); } }),
     chk('Listen to program feeds automatically', 'autoFeeds', () => { if (prefs.autoFeeds && S.connected) { prefs.feedsOff = []; ws.close(); } }),
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles hands-free talk in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
