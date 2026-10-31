@@ -398,6 +398,17 @@ function stopPublish(fromServer) {
   update();
 }
 
+// Install button: use the browser's prompt when it has offered one, otherwise say how to install from its own menu.
+function installApp() {
+  if (installEvt) { installEvt.prompt(); return; }
+  const ua = navigator.userAgent;
+  const how = /iPhone|iPad|iPod/.test(ua) ? 'In Safari, tap the Share button, then "Add to Home Screen". (Other iPhone browsers cannot install apps.)'
+    : /SamsungBrowser/.test(ua) ? 'Tap the menu (three lines), then "Add page to", then "Home screen".'
+    : /Firefox/.test(ua) ? 'Tap the menu (⋮), then "Install".'
+    : 'In Chrome, tap the menu (⋮), then "Install app" or "Add to Home screen". If you only see "Add to Home screen", run "Check why the app can\'t install" below.';
+  toast(how, 9000);
+}
+
 // ----- install self-check -----
 // Walks through what a browser needs before it offers to install the app and reports what this device actually sees.
 async function installReport() {
@@ -475,7 +486,7 @@ async function settings() {
     h('div', { style: 'margin:8px 0' }, h('button', { onclick: async (e) => { e.target.disabled = true; instOut.textContent = 'Checking…'; instOut.textContent = await installReport(); e.target.disabled = false; } }, 'Check why the app can\'t install')), instOut,
     h('h2', {}, 'Account'),
     h('button', { onclick: changePassword }, 'Change password'),
-    installEvt && h('button', { style: 'margin-left:8px', onclick: () => { installEvt.prompt(); } }, 'Install app'),
+    !(matchMedia('(display-mode: standalone)').matches || navigator.standalone) && h('button', { style: 'margin-left:8px', onclick: installApp }, 'Install app'),
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);
 }
