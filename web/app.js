@@ -208,7 +208,7 @@ function onMsg(m) {
       break;
     }
     case 'sync': S.pongAt = performance.now(); engine.clock.add(m.c, m.s, performance.now()); break;
-    case 'presence': S.presence = m; update(); break;
+    case 'presence': S.presence = m; notePresence(m); update(); break;
     case 'publish': if (!m.on && S.publishing === m.feed) stopPublish(true); break;
     case 'error': toast(m.msg); break;
     case 'kicked': toast('Your access was removed'); break;
@@ -224,6 +224,22 @@ function render() {
   update();
 }
 
+// A speaker stays highlighted for a moment after they stop, so a name does not flash on and off between words.
+const TAIL_MS = 3000;
+const heard = new Map();      // "roomId:connection" -> when that person was last speaking
+const lastSpoke = {};         // roomId -> the most recent person to speak there (kept for the floating window)
+let tailTimer = 0;
+function notePresence(m) {
+  const now = Date.now();
+  for (const [rid, ms] of Object.entries(m.rooms || {})) for (const x of ms || []) if (x.t) { heard.set(rid + ':' + x.c, now); lastSpoke[rid] = { n: x.c === S.c ? 'You' : x.n }; }
+  scheduleTail();
+}
+const isHot = (rid, x) => !!x.t || Date.now() - (heard.get(rid + ':' + x.c) || 0) < TAIL_MS;
+function scheduleTail() {
+  clearTimeout(tailTimer); const now = Date.now(); let next = Infinity;
+  for (const [k, t] of heard) { if (now - t >= TAIL_MS) heard.delete(k); else next = Math.min(next, t + TAIL_MS); }
+  if (next < Infinity) tailTimer = setTimeout(() => { update(); scheduleTail(); }, next - now + 30);   // redraw when the next highlight runs out
+}
 function update() { for (const c of cards.values()) c(); audioBanner(); pip.baseOk = false; pipDraw(); }
 
 // Browsers only start audio after a tap/click. Rooms remembered from a previous visit are re-joined
@@ -268,7 +284,7 @@ function roomCard(r) {
     sw.checked = on; el.classList.toggle('joined', on); mt.el.hidden = !on;
     const ms = S.presence.rooms?.[r.id] || [];
     // Everyone in the room is listed, and whoever is speaking lit up, whether or not you have joined it yourself.
-    chips.replaceChildren(...(ms.length ? ms.map((m) => h('span', { class: 'chip' + (m.t ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, 'Nobody here')]));
+    chips.replaceChildren(...(ms.length ? ms.map((m) => [m, isHot(r.id, m)]).sort((a, b) => b[1] - a[1]).map(([m, hot]) => h('span', { class: 'chip' + (hot ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, 'Nobody here')]));
     if (btn) { btn.hidden = !on; btn.classList.toggle('on', S.talking.has(r.id)); btn._label(); }
   });
   if (S.joined.has(r.id)) setTimeout(() => applyRoom(r.id), 0);
@@ -503,7 +519,7 @@ function pipSupported() {
 function pipModel() {
   const rows = S.rooms.filter((r) => S.joined.has(r.id)).map((r, i) => {
     const ms = S.presence.rooms?.[r.id] || [];
-    return { id: r.id, name: r.name, color: r.color, here: ms.length, order: i, speakers: ms.filter((m) => m.t).map((m) => (m.c === S.c ? 'You' : m.n)) };
+    return { id: r.id, name: r.name, color: r.color, here: ms.length, order: i, speakers: ms.filter((m) => isHot(r.id, m)).map((m) => (m.c === S.c ? 'You' : m.n)), last: lastSpoke[r.id]?.n || '' };
   });
   rows.sort((a, b) => (b.speakers.length > 0) - (a.speakers.length > 0) || a.order - b.order);
   return { live: S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name), rows };
@@ -527,6 +543,7 @@ function pipBase() {
     g.fillStyle = talking ? '#e8ecf4' : '#aab3c5'; g.font = '600 21px system-ui, sans-serif';
     g.fillText(fit(r.name, g.font, 150), 22, y + 23);
     if (talking) { g.fillStyle = '#4ade80'; g.font = '700 27px system-ui, sans-serif'; g.fillText(fit(r.speakers.join(', '), g.font, W - 190), 180, y + 23); }
+    else if (r.last) { g.fillStyle = '#7d879b'; g.font = '500 20px system-ui, sans-serif'; g.fillText(fit('Last: ' + r.last, g.font, W - 190), 180, y + 23); }   // nobody speaking now: show who spoke last
     else { g.fillStyle = '#6b7487'; g.font = '500 18px system-ui, sans-serif'; g.fillText(r.here ? r.here + (r.here === 1 ? ' person here' : ' people here') : 'empty', 180, y + 23); }
   });
   if (m.rows.length > maxRows) { const rest = m.rows.length - (maxRows - 1); g.fillStyle = '#8a93a6'; g.font = '500 19px system-ui, sans-serif'; g.fillText('+' + rest + ' more room' + (rest === 1 ? '' : 's'), 22, 48 + (maxRows - 1) * rowH + 21); }
@@ -674,7 +691,7 @@ function pocketLock() {
     h('div', {}, 'Locked · hold to unlock'), h('div', { style: 'width:160px;margin-top:14px' }, bar));
   let t = null;
   const stop = () => { clearTimeout(t); bar.style.transition = 'none'; bar.style.width = '0'; };
-  o.addEventListener('pointerdown', (e) => { e.preventDefault(); bar.style.transition = 'width 1.5s linear'; bar.style.width = '100%'; t = setTimeout(() => { o.remove(); pocket = false; setWake(); }, 1500); });
+  o.addEventListener('pointerdown', (e) => { e.preventDefault(); bar.style.transition = 'width 0.75s linear'; bar.style.width = '100%'; t = setTimeout(() => { o.remove(); pocket = false; setWake(); }, 750); });
   for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) o.addEventListener(ev, stop);
   o.addEventListener('contextmenu', (e) => e.preventDefault());
   document.body.append(o);

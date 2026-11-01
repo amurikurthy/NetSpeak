@@ -9,7 +9,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 **Talking**
 - Rooms with tap-to-latch or hold-to-talk. Tap the button once and you stay live until you tap again; hold it for push-to-talk. A room can be set to push-to-talk only
 - Talking always goes to one room: starting in a second room moves you there
-- See who is in every room you have access to, whether or not you have joined it, and who is actually speaking right now. Speakers jump to the front of the list and light up. Rooms you have no access to are not shown at all
+- See who is in every room you have access to, whether or not you have joined it, and who is actually speaking right now. Speakers jump to the front of the list and light up, and stay lit for 3 seconds after they stop so a name does not flicker between words. Rooms you have no access to are not shown at all
 - Join several rooms at once and hear them mixed, with a volume slider per room
 - Headset or earbud button toggles your mic in the active room
 - **Level meters** (with a white peak-hold line) on every room you have joined, on each program feed, and on the master listening volume. They show what you actually hear, after your volume sliders
@@ -21,8 +21,8 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
-- A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter. The app meters redraw on every screen refresh. The floating window draws its meter about 30 times a second, and slows itself to 10 on a phone that cannot keep up. A phone can only float video, so the status is drawn as a picture and updates only when something changes
-- Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold
+- A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter. When nobody is speaking in a room it shows who spoke last. The app meters redraw on every screen refresh. The floating window draws its meter about 30 times a second, and slows itself to 10 on a phone that cannot keep up. A phone can only float video, so the status is drawn as a picture and updates only when something changes
+- Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold for three quarters of a second
 - Recovers by itself when you come back to the app (if the audio never stopped, for example while the floating window was open, it changes nothing, so there is no glitch): reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
 - Plays on the phone's normal media volume, so there is one volume slider, not a separate "call" volume
 
