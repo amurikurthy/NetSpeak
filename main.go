@@ -63,8 +63,8 @@ func main() {
 
 	auth := NewAuth(st, env("NETSPEAK_TRUST_PROXY", "1") == "1")
 	hub := NewHub(st, auth)
-	hub.feedDelayMs = 100
-	if v, err := strconv.Atoi(env("NETSPEAK_FEED_DELAY_MS", "100")); err == nil && v >= 50 && v <= 2000 {
+	hub.feedDelayMs = 300
+	if v, err := strconv.Atoi(env("NETSPEAK_FEED_DELAY_MS", "300")); err == nil && v >= 50 && v <= 2000 {
 		hub.feedDelayMs = v
 	}
 	api := &API{st: st, auth: auth, hub: hub}

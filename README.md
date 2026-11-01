@@ -17,7 +17,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 **Program feeds**
 - One-way stereo audio, Opus at 192 kbps, sent from a browser (line-in or audio interface) or pushed from ffmpeg, OBS or anything that can make an Ogg/Opus stream
 - Compressor and limiter at the sending end keep the level even and stop peaks clipping
-- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (100 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth
+- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (300 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
@@ -112,7 +112,7 @@ All settings go in the `environment:` section of the compose file.
 | Variable | Default | |
 |---|---|---|
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password (first start only) |
-| `NETSPEAK_FEED_DELAY_MS` | 100 | the fixed delay every listener adds to program audio so all devices stay in sync. It must be longer than your slowest listener's network delay (50 to 2000) |
+| `NETSPEAK_FEED_DELAY_MS` | 300 | the fixed delay every listener adds to program audio so all devices stay in sync. It must be longer than your slowest listener's network delay (50 to 2000) |
 | `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
 | `NETSPEAK_PORT` | 443 (8080 if TLS is off) | listen port |
 | `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy. Set `0` if the container is exposed directly |
