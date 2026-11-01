@@ -51,6 +51,7 @@ export class SyncPlayout {
     // their play time make it grow (the listener drifts a little out of lockstep, but hears smooth audio instead of gaps);
     // it shrinks again slowly once chunks arrive comfortably early.
     this.extra = 0;
+    this.lastDry = -1e9;         // audio-clock time of the last time the queue ran dry
     this.stats = { drops: 0, reanchors: 0, corrections: 0, dry: 0, dryMaxMs: 0 };
   }
 
@@ -61,6 +62,7 @@ export class SyncPlayout {
     const late = now + 0.002 - desired;
     if (late > 0) {
       if (late > 1.0) { this.stats.drops++; this.next = null; return { drop: true, when: desired, slip: 0 }; }   // hopelessly late
+      this.lastDry = now;
       this.extra = Math.min(1.0, this.extra + late + 0.03); desired = desired0 + this.extra;
     }
     const when = Math.max(desired, now + 0.002);
@@ -79,18 +81,21 @@ export class SyncPlayout {
     this.bias += 0.01 * (Math.max(-0.05, Math.min(0.05, err)) - this.bias);   // about a 2 s time constant
     let slip = 0;
     if (Math.abs(this.bias) > 0.0008) {
-      slip = Math.max(-this.maxSlip, Math.min(this.maxSlip, Math.round(this.bias * this.sr)));
+      const lim = Math.abs(err) > 0.02 ? 12 : this.maxSlip;     // a larger gap to close (catching up) may be closed a little faster
+      slip = Math.max(-lim, Math.min(lim, Math.round(this.bias * this.sr)));
       if (slip) { this.stats.corrections++; this.bias -= slip / this.sr; }
     }
     let when = this.next;
     if (when < now - 0.005) {                                 // our queue ran dry: this chunk is late for this network
       const late = now - when;
-      this.stats.dry++; this.stats.dryMaxMs = Math.max(this.stats.dryMaxMs, Math.round(late * 1000));
+      this.lastDry = now; this.stats.dry++; this.stats.dryMaxMs = Math.max(this.stats.dryMaxMs, Math.round(late * 1000));
       if (late > 1.0) { this.stats.drops++; this.next = null; return { drop: true, when, slip: 0 }; }
       this.extra = Math.min(1.0, this.extra + late + 0.02);
       when = now + 0.02;
-    } else if (this.extra > 0 && when - now > 0.12) {
-      this.extra = Math.max(0, this.extra - 0.0002);          // comfortably early: give some of the cushion back
+    } else if (this.extra > 0 && now - this.lastDry > 5 && when - now > 0.05) {
+      // Quiet for a while: hand the cushion back, so this device catches up with the others instead of staying behind.
+      // The steering above turns the shrinking cushion into slightly faster playback (about 0.7%), which nobody hears.
+      this.extra = Math.max(0, this.extra - 0.00015);
     }
     this.next = when + (n + slip) / this.sr;
     return { when, slip, drop: false };

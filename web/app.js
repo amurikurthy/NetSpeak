@@ -160,14 +160,21 @@ async function recover(awayMs) {
   if (!S.me) return;
   setWake();
   if (engine.ctx && engine.ctx.state === 'closed') return location.reload();   // the phone destroyed the sound engine: start over
-  if (awayMs > 3000) engine.resetVoices();                                      // anything decoded before leaving is stale
+  // Leaving the app is not always being away: with the floating window open the page keeps running and the audio never
+  // stopped. If the connection is open, the sound engine is running and packets or clock replies are still arriving,
+  // there is nothing to repair, and tearing it down would only make the sound glitch.
+  const t = performance.now();
+  const healthy = !!ws && ws.readyState === 1 && !!engine.ctx && engine.ctx.state === 'running'
+    && (t - (engine.stats.rxLast || 0) < 2000 || t - (S.pongAt || 0) < 8000);
+  const stale = awayMs > 3000 && !healthy;
+  if (stale) engine.resetVoices();                                              // anything decoded before leaving is stale
   engine.resume();                                                              // may need a tap on some phones: the banner covers that
   // A connection that was open before an absence is usually dead now, even if it still says "open".
-  if (awayMs > 3000 || !ws || ws.readyState !== 1) connect();
+  if (stale || !ws || ws.readyState !== 1) connect();
   // The phone may have stopped the microphone while the app was away.
   if (voice && voice.track && voice.track.readyState !== 'live') await closeMic();
   if (S.rooms.some((r) => r.talk)) ensureMic();
-  if (ws && ws.readyState === 1) startClockSync();   // the device clock may have lost time while away: measure it again
+  if (!healthy && ws && ws.readyState === 1) startClockSync();   // the device clock may have lost time while away: measure it again
   audioBanner();
 }
 
@@ -200,7 +207,7 @@ function onMsg(m) {
       if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
       break;
     }
-    case 'sync': engine.clock.add(m.c, m.s, performance.now()); break;
+    case 'sync': S.pongAt = performance.now(); engine.clock.add(m.c, m.s, performance.now()); break;
     case 'presence': S.presence = m; update(); break;
     case 'publish': if (!m.on && S.publishing === m.feed) stopPublish(true); break;
     case 'error': toast(m.msg); break;
@@ -554,7 +561,8 @@ async function pipToggle() {
       pip.track = stream.getVideoTracks()[0];
       const v = pip.video = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = stream;
-      v.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      v.width = 480; v.height = 270;   // 16:9, the same shape as the picture, in case the browser sizes the window from the element
+      v.style.cssText = 'position:fixed;left:0;bottom:0;width:32px;height:18px;opacity:0;pointer-events:none';
       v.addEventListener('enterpictureinpicture', () => pipOn(true));
       v.addEventListener('leavepictureinpicture', () => pipOn(false));
       v.addEventListener('webkitpresentationmodechanged', () => pipOn(v.webkitPresentationMode === 'picture-in-picture'));

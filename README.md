@@ -17,13 +17,13 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 **Program feeds**
 - One-way stereo audio, Opus at 192 kbps, sent from a browser (line-in or audio interface) or pushed from ffmpeg, OBS or anything that can make an Ogg/Opus stream
 - Compressor and limiter at the sending end keep the level even and stop peaks clipping
-- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (300 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth
+- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (350 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth. Once its network has been steady for a few seconds it hands that cushion back by playing a fraction of a percent faster, so it catches up with the other devices
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
 - A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter, all redrawn up to 120 times a second. A phone can only float video, so the status is drawn as a picture and updates only when something changes
 - Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold
-- Recovers by itself when you come back to the app: reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
+- Recovers by itself when you come back to the app (if the audio never stopped, for example while the floating window was open, it changes nothing, so there is no glitch): reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
 - Plays on the phone's normal media volume, so there is one volume slider, not a separate "call" volume
 
 **Clean microphone**
@@ -112,7 +112,7 @@ All settings go in the `environment:` section of the compose file.
 | Variable | Default | |
 |---|---|---|
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password (first start only) |
-| `NETSPEAK_FEED_DELAY_MS` | 300 | the fixed delay every listener adds to program audio so all devices stay in sync. It must be longer than your slowest listener's network delay (50 to 2000) |
+| `NETSPEAK_FEED_DELAY_MS` | 350 | the fixed delay every listener adds to program audio so all devices stay in sync. It must be longer than your slowest listener's network delay (50 to 2000) |
 | `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
 | `NETSPEAK_PORT` | 443 (8080 if TLS is off) | listen port |
 | `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy. Set `0` if the container is exposed directly |

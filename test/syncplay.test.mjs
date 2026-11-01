@@ -28,14 +28,14 @@ assert(Math.abs(sym.err) < 4, 'symmetric paths sync to a few ms');
 assert(Math.abs(asym.err) <= asym.bound + 1, 'error never exceeds half the round trip');
 
 // ---- 2. several devices, one stream ----------------------------------------------------------------------
-const D = 100;                                                   // fixed listener delay, ms
+const D = 350;                                                   // fixed listener delay, ms
 function simulate(devices, seconds = 600) {
   const out = devices.map((d) => { const m = measure({ up: d.net, down: d.net, jitter: d.jit, P: d.P }); return { ...d, est: d.P + m.err, e: m.err, pl: new SyncPlayout(SR), times: [], slips: 0 }; });
   const count = Math.floor(seconds / 0.02);
   for (let i = 0; i < count; i++) {
     const emit = 5000 + i * 20;                                  // server clock = world ms; stamp = emit
     for (const d of out) {
-      const stall = d.stall && i % 1500 > 1480 ? 400 : 0;       // an occasional 400 ms network stall
+      const stall = (d.stall && i % 1500 > 1480 ? 400 : 0) + (d.stallEarly && i < 1500 && i % 100 > 94 ? 450 : 0);       // an occasional 400 ms network stall
       const arrive = emit + d.net + d.jit * rnd() + stall;
       // (ctx, perf) pair at the moment of arrival: ctx = seconds on the audio clock, perf = ms
       const ctxAt = (W) => (W - d.T0) / 1000 * (1 + d.ppm * 1e-6), perfAt = (W) => W - d.P;
@@ -82,12 +82,25 @@ console.log(`4. noisy clock readings (+/-8 ms), 10 min: jumps ${stats3.map((s) =
 assert(stats3.every((s) => s.reanchors === 0 && s.drops === 0), 'noise must not cause jumps or skips');
 assert(devs3.every((d) => d.slips / chunks3 < 0.2), 'noise must not make the player warble constantly');
 
-// A network slower than the fixed delay (150 ms path, 100 ms delay): audio keeps playing, just not in lockstep with the others.
-const devs4 = simulate([{ net: 150, jit: 30, P: 5, T0: 1, ppm: 0 }], 120);
+// A network slower than the fixed delay (500 ms path, 350 ms delay): audio keeps playing, just not in lockstep with the others.
+const devs4 = simulate([{ net: 500, jit: 40, P: 5, T0: 1, ppm: 0 }], 120);
 const gapsMs = (() => { const t = devs4[0].times.filter((x) => x !== null); let g = 0; for (let i = 1; i < t.length; i++) { const gap = t[i] - t[i - 1] - 20; if (gap > 2) g += gap; } return g; })();
-console.log(`5. network slower than the delay (150 ms vs 100 ms): skipped ${devs4[0].pl.stats.drops} chunks, total silence ${gapsMs.toFixed(0)} ms over 2 min, extra local cushion ${(devs4[0].pl.extra * 1000).toFixed(0)} ms`);
+console.log(`5. network slower than the delay (500 ms vs 350 ms): skipped ${devs4[0].pl.stats.drops} chunks, total silence ${gapsMs.toFixed(0)} ms over 2 min, extra local cushion ${(devs4[0].pl.extra * 1000).toFixed(0)} ms`);
 assert(devs4[0].pl.stats.drops === 0, 'slow networks must degrade to late playback, not skipping');
 assert(gapsMs < 6000, 'and the audio must stay smooth (under 5% silence)');
+
+// A device that fell behind after stalls must catch up with the others once its network is good again.
+const devs5 = simulate([
+  { net: 10, jit: 10, P: 1, T0: 100, ppm: 50 },
+  { net: 30, jit: 15, P: 2, T0: 7, ppm: -60, stallEarly: true },
+], 240);
+const lagAfterStalls = devs5[1].pl.stats.dry;
+const tail = (devs) => { let worst = 0; const len = devs[0].times.length; for (let i = len - 1000; i < len; i++) { const t = devs.map((d) => d.times[i]).filter((x) => x !== null); if (t.length === 2) worst = Math.max(worst, Math.max(...t) - Math.min(...t)); } return worst; };
+const e5 = Math.abs(devs5[0].e - devs5[1].e);
+console.log(`7. catching up: the stalled device ran dry ${lagAfterStalls}x early on; four minutes later its extra delay is ${(devs5[1].pl.extra * 1000).toFixed(1)} ms and it differs from the other device by ${tail(devs5).toFixed(2)} ms`);
+assert(lagAfterStalls > 0, 'the scenario must actually make it fall behind');
+assert(devs5[1].pl.extra < 0.002, 'extra delay must be handed back after things are quiet');
+assert(tail(devs5) <= e5 + 2.0, 'and it must be back in step with the other device');
 
 // ---- 3. interpolation quality ---------------------------------------------------------------------------
 const err = (f, m) => { const x = Float32Array.from({ length: N }, (_, i) => Math.sin(2 * Math.PI * f * i / SR)); const y = stretch(x, m); let e = 0, s = (N - 1) / (m - 1);
