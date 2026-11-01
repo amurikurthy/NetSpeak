@@ -252,7 +252,8 @@ function roomCard(r) {
     const on = S.joined.has(r.id);
     sw.checked = on; el.classList.toggle('joined', on);
     const ms = S.presence.rooms?.[r.id] || [];
-    chips.replaceChildren(...(on ? ms.map((m) => h('span', { class: 'chip' + (m.t ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, `${ms.length} in room`)]));
+    // Everyone in the room is listed, and whoever is speaking lit up, whether or not you have joined it yourself.
+    chips.replaceChildren(...(ms.length ? ms.map((m) => h('span', { class: 'chip' + (m.t ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, 'Nobody here')]));
     if (btn) { btn.hidden = !on; btn.classList.toggle('on', S.talking.has(r.id)); btn._label(); }
   });
   if (S.joined.has(r.id)) setTimeout(() => applyRoom(r.id), 0);

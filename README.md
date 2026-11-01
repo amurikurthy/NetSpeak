@@ -9,7 +9,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 **Talking**
 - Rooms with tap-to-latch or hold-to-talk. Tap the button once and you stay live until you tap again; hold it for push-to-talk. A room can be set to push-to-talk only
 - Talking always goes to one room: starting in a second room moves you there
-- See who is in each room, and who is actually speaking right now. Speakers jump to the front of the list and light up
+- See who is in every room you have access to, whether or not you have joined it, and who is actually speaking right now. Speakers jump to the front of the list and light up. Rooms you have no access to are not shown at all
 - Join several rooms at once and hear them mixed, with a volume slider per room
 - Headset or earbud button toggles your mic in the active room
 
