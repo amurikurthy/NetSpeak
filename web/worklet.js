@@ -117,6 +117,13 @@ class Aec {
     this.muHi = 1.2; this.muLo = 0.8; this.muDt = 0.002; this.freeze = 0; this.silent = 0; this.alpha = 0; this.leakK = 0; this.cohT = 0.38; this.cohBeta = 0.02; this.prop = 0.6; this.floorRel = 0.02; // tuning: step before/after convergence, proportionate share, power floor
   }
 
+  // Forget the recent history (not the learned filter): used when the canceller has been idle and starts again.
+  wake() {
+    this.xbuf.fill(0); this.dbuf.fill(0); this.Xr.fill(0); this.Xi.fill(0);
+    this.Cr.fill(0); this.Ci.fill(0); this.PX.fill(0); this.PD.fill(0);
+    this.coh = 0; this.alpha = 0; this.silent = 0; this.freeze = 0;
+  }
+
   // d: mic block, x: reference block (B samples each, 16 kHz). Writes the echo estimate to yhat.
   block(d, x, yhat) {
     const { B, N, K, P, re, im } = this;
@@ -268,6 +275,10 @@ class AecStage {
     this.d16 = new Float64Array(128); this.x16 = new Float64Array(128); this.y16 = new Float64Array(128); this.yup = new Float64Array(384);
     this.micHist = new Float64Array(this.mdel);
   }
+  wake() {
+    this.aec.wake(); this.micHist.fill(0);
+    for (const p of [this.dm, this.dr, this.up]) p.hist.fill(0);
+  }
   process(mic, ref, out) {
     this.dm.decimate(mic, this.d16); this.dr.decimate(ref, this.x16);
     this.aec.block(this.d16, this.x16, this.y16);
@@ -311,7 +322,15 @@ class Framer extends AudioWorkletProcessor {
       this.aPos = 0; this.aRead = 0;
     }
     this.aecOff = false;   // switched off from outside when this device cannot keep up
+    // Idle (not talking): nothing is sent, so all processing is skipped and only the level is reported for the meter.
+    this.active = o.active !== false;
+    this.idleSum = 0; this.idleN = 0;
     this.port.onmessage = (e) => {
+      if ('active' in e.data) {
+        const on = !!e.data.active;
+        if (on && !this.active) this.wake();
+        this.active = on;
+      }
       if ('aec' in e.data && this.aec) this.aecOff = !e.data.aec;
       if ('gate' in e.data) { this.gate = !!e.data.gate; if (!this.gate) this.g = 1; }
       if ('threshold' in e.data) this.thr = Math.pow(10, e.data.threshold / 20);
@@ -370,10 +389,23 @@ class Framer extends AudioWorkletProcessor {
     }
   }
 
+  // Starting to talk: begin from a clean slate (the learned echo filter is kept).
+  wake() {
+    this.pos = 0; this.env = 0; this.hold = 0; this.g = this.gate ? 0 : 1;
+    if (this.aec) { this.aec.wake(); this.aPos = 0; this.aRead = 0; this.aOut.fill(0); }
+  }
+
   process(inputs) {
     const inp = inputs[0];
     if (!inp || !inp.length) return true;
     const n = inp[0].length;
+    if (!this.active) {
+      const x = inp[0];
+      for (let i = 0; i < n; i++) this.idleSum += x[i] * x[i];
+      this.idleN += n;
+      if (this.idleN >= this.N) { this.port.postMessage({ level: Math.sqrt(this.idleSum / this.idleN) }); this.idleSum = 0; this.idleN = 0; }
+      return true;
+    }
     for (let i = 0; i < n; i++) {
       let peak = 0;
       const xs = [];

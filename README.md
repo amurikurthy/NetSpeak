@@ -1,8 +1,8 @@
 # NetSpeak
 
-A self-hosted intercom for crews, venues and events, with program audio for everyone. One small container, one port, no database, no accounts with anyone else: you run it, you own it.
+A self-hosted intercom for crews, venues and events, with synchronised program audio. One small container, one port, no database, no accounts with anyone else: you run it, you own it.
 
-People talk to each other in **rooms** from any phone or computer. Everyone can also listen to a **program feed** (the show audio, a mix, a stream) that everyone can listen to. The admin decides, person by person, who can hear and talk where.
+People talk to each other in **rooms** from any phone or computer. Everyone can also listen to a **program feed** (the show audio, a mix, a stream) that plays in sync on every device. The admin decides, person by person, who can hear and talk where.
 
 ## Highlights
 
@@ -12,21 +12,23 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 - See who is in every room you have access to, whether or not you have joined it, and who is actually speaking right now. Speakers jump to the front of the list and light up. Rooms you have no access to are not shown at all
 - Join several rooms at once and hear them mixed, with a volume slider per room
 - Headset or earbud button toggles your mic in the active room
+- **Level meters** (dBFS, with peak hold) on every room you have joined, on each program feed, and on the master listening volume. They show what you actually hear, after your volume sliders
 
 **Program feeds**
 - One-way stereo audio, Opus at 192 kbps, sent from a browser (line-in or audio interface) or pushed from ffmpeg, OBS or anything that can make an Ogg/Opus stream
 - Compressor and limiter at the sending end keep the level even and stop peaks clipping
-- A fixed playout cushion of 150 ms keeps the music smooth over phone and Wi-Fi networks. Each device plays the feed as it arrives, so listeners can differ by their network delay
+- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (250 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
+- A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with "+N more rooms" if they do not fit, and a red "You are live" banner while your mic is open. A phone can only float video, so the status is drawn as a picture and updates only when something changes
 - Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold
 - Recovers by itself when you come back to the app: reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
 - Plays on the phone's normal media volume, so there is one volume slider, not a separate "call" volume
 
 **Clean microphone**
 - Noise suppression with a gentle low-cut
-- A **built-in echo canceller** that learns from what the device is playing and removes it from the mic, in software, so the phone never has to switch into call mode. It is kept light, and switches itself off if a device's audio thread starts to struggle, because smooth sound matters more than a little echo
+- A **built-in echo canceller** that learns from what the device is playing and removes it from the mic, in software, so the phone never has to switch into call mode. It is kept light, and switches itself off if a device's audio thread starts to struggle, because smooth sound matters more than a little echo. While you are only listening, none of this runs at all, so listening costs the audio thread almost nothing
 - An **automatic feedback suppressor** that finds a howling tone on the mic and cuts just that frequency. Nobody is muted, so you can hear others while you talk, and talk over each other
 - Mic volume from 0 to 125%, and a level meter that goes green, yellow, orange and red
 - Earbuds or a headset are still the best protection against feedback
@@ -110,6 +112,7 @@ All settings go in the `environment:` section of the compose file.
 | Variable | Default | |
 |---|---|---|
 | `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password (first start only) |
+| `NETSPEAK_FEED_DELAY_MS` | 250 | the fixed delay every listener adds to program audio so all devices stay in sync. It must be longer than your slowest listener's network delay (50 to 2000) |
 | `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
 | `NETSPEAK_PORT` | 443 (8080 if TLS is off) | listen port |
 | `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy. Set `0` if the container is exposed directly |
@@ -136,14 +139,14 @@ ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=2
 
 The key is shown in Admin, Feeds, Ingest. Use 20 ms frames. Opus is lossy, but at 192 kbps it is transparent for monitoring. It is not bit-exact PCM.
 
-**Settings** (in the app): microphone and speaker choice, keep screen on, Diagnostics, reload, sign out. People cannot change their own name or password: only an admin can, under Admin, Users. The signed-in name is shown under the app name in the top bar. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller and the feedback suppressor, which is the first place to look when something sounds wrong.
+**Settings** (in the app): microphone and speaker choice, keep screen on, Diagnostics, reload, sign out. People cannot change their own name or password: only an admin can, under Admin, Users. The signed-in name is shown under the app name in the top bar. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller, the feedback suppressor and the program-feed clock sync, which is the first place to look when something sounds wrong.
 
 ## How it works
 
 - **Transport.** Everything rides one WebSocket over HTTPS: control messages as JSON, audio as binary Opus packets. The server only relays. It never decodes or mixes audio, and checks every packet against the sender's current permissions
 - **Codec.** The browser encodes and decodes Opus with WebCodecs. Voice is mono at 32 kbps, program audio is stereo at 192 kbps
-- **Playback.** Each decoded 20 ms chunk is queued right behind the previous one on the device's audio clock, with a small fixed cushion against network jitter (80 ms for rooms, 150 ms for the program feed). Nothing is queued while the phone has suspended the sound engine, and Stop cancels whatever is already queued
-- **Echo, noise and feedback.** The microphone passes through an AudioWorklet that runs a light 16 kHz frequency-domain echo canceller (using what the device is playing as the reference), a double-talk protection that stops it learning while you speak, and a feedback suppressor that places narrow notch filters on howling tones. If a device's audio thread starts to struggle, the echo canceller switches itself off, because smooth sound matters more than a little echo
+- **Playback.** Room voices are queued right behind one another on the device's audio clock with a small cushion (80 ms). The program feed is scheduled from the server's stamps (see above): the device measures its clock offset with repeated ping/pong exchanges, smooths out noisy readings, and nudges playback by a few samples to track drift. A device whose network is slower than the delay plays late instead of skipping. Nothing is queued while the phone has suspended the sound engine, and Stop cancels whatever is already queued
+- **Echo, noise and feedback.** While you are talking, the microphone passes through an AudioWorklet that runs a light 16 kHz frequency-domain echo canceller (using what the device is playing as the reference), a double-talk protection that stops it learning while you speak, and a feedback suppressor that places narrow notch filters on howling tones. If a device's audio thread starts to struggle, the echo canceller switches itself off, because smooth sound matters more than a little echo
 - **State.** Users, rooms, feeds and access live in one JSON file in `/data`, written atomically. There is no database and no other service
 
 ## Browser support and phone notes
@@ -168,7 +171,8 @@ NETSPEAK_DATA=./data NETSPEAK_PORT=8443 go run .
 The frontend is plain ES modules in `web/`, embedded into the binary: there is no build step.
 
 ```bash
-go test ./...                    # permissions, ordering
+go test ./...                    # permissions, ordering, the server's stamp clock
+node test/syncplay.test.mjs      # synchronised playout across devices with different networks, clocks and noisy readings
 node test/feedback.test.js       # feedback suppressor, in a simulated howling loop
 node test/aec.test.js            # echo canceller, with real synthesised speech (needs ffmpeg with flite; skips if missing)
 ```

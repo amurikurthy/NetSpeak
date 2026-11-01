@@ -84,4 +84,24 @@ const talk = nearVoice.subarray(0, SR * 8), quiet = new Float32Array(talk.length
 let dd = 0; for (let i = SR; i < SR * 7; i++) dd += Math.abs(r.out[i + D] - talk[i]);
 console.log(`5. nothing playing: mic passes through, mean difference ${(dd / (SR * 6)).toExponential(1)}`);
 assert(dd / (SR * 6) < 5e-4, 'must not alter the mic when nothing is playing');
+// 7. idle (not talking) then talking again: no processing and no frames while idle; the learned filter is kept
+{
+  nz = noise(); mic = echoOf(x).map((v, i) => v + nz[i]);
+  const p = new Ctor({ processorOptions: { channels: 1, gate: false, feedback: true, aec: true } });
+  let frames = 0, levels = 0; const out = []; p.port.postMessage = (m) => { if (m.frame) { frames++; out.push(...m.frame); } else if (typeof m.level === 'number') levels++; };
+  const a = new Float32Array(128), b = new Float32Array(128), step = (n) => { a.set(mic.subarray(n, n + 128)); b.set(x.subarray(n, n + 128)); const t0 = process.hrtime.bigint(); p.process([[a], [b]]); return Number(process.hrtime.bigint() - t0) / 1e6; };
+  let n = 0; for (; n < SR * 20; n += 128) step(n);                    // talking: converge
+  p.port.onmessage({ data: { active: false } });
+  const f0 = frames, l0 = levels; let idleMs = 0, idleSlices = 0; for (; n < SR * 26; n += 128) { idleMs += step(n); idleSlices++; }
+  console.log(`7. idle for 6 s: frames sent ${frames - f0}, level reports ${levels - l0}, ${(idleMs / idleSlices * 1000).toFixed(1)} us per slice (talking costs about 300 us)`);
+  assert(frames === f0 && levels - l0 >= 280, 'idle must send no audio frames, only levels');
+  p.port.onmessage({ data: { active: true } });
+  const startOut = out.length; for (; n < SR * 34; n += 128) step(n);
+  const seg = (arr, s, e) => { let t = 0; for (let i = s; i < e; i++) t += arr[i] * arr[i]; return t / (e - s); };
+  const m0 = SR * 26 + SR * 2, m1 = SR * 34 - SR, o0 = startOut + SR * 2, o1 = startOut + SR * 7;
+  const back = db(seg(mic, m0, m1) / seg(out, o0, o1));
+  console.log(`   after talking again: echo removed ${back.toFixed(1)} dB (2-7 s after waking)`);
+  assert(back > 12, 'the learned filter must still work after being idle');
+}
+
 console.log('OK');

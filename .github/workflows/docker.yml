@@ -17,7 +17,7 @@ jobs:
       - run: go vet ./... && go test ./...
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: node test/feedback.test.js && node test/aec.test.js
+      - run: node test/feedback.test.js && node test/syncplay.test.mjs && node test/aec.test.js
   image:
     needs: test
     runs-on: ubuntu-latest

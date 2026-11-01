@@ -42,6 +42,7 @@ export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.str
 const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, joined: new Set(), talking: new Set(),
   listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
+let syncTimer = null;
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, voice = null, micPromise = null, micError = '', wakeLock = null;
 let lastFbToast = 0;
 const root = $('#app');
@@ -84,6 +85,7 @@ async function appView() {
   ui.rooms = h('div'); ui.feeds = h('div'); ui.warn = h('div');
   ui.audio = h('div', { class: 'warn', hidden: true, style: 'cursor:pointer;font-weight:600', onclick: () => enableAudio() }, '🔇 Audio is off: tap here to start listening');
   ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);   // ui.mic is the mask over the unlit part of the bar
+  const masterMeter = addMeter('master', () => engine.masterLevel());
   const micPct = h('span', {}, Math.round(prefs.micGain * 100) + '%');
   const mv = h('input', { type: 'range', min: 0, max: 1.25, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; micPct.textContent = Math.round(prefs.micGain * 100) + '%'; savePrefs(); voice?.setGain(prefs.micGain); } });
   const lv = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
@@ -91,11 +93,12 @@ async function appView() {
   root.replaceChildren(
     h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, h('div', {}, h('div', {}, 'NetSpeak'), ui.who)),
       S.me.role === 'admin' && h('button', { class: 'ghost', onclick: () => { location.hash = '#admin'; } }, 'Admin'),
+      pipSupported() && h('button', { class: 'ghost', title: 'Floating window: who is talking', 'aria-label': 'Floating window', onclick: pipToggle }, '⧉', h('span', { class: 'lbl' }, ' Float')),
       h('button', { class: 'ghost', title: 'Pocket lock', 'aria-label': 'Pocket lock', onclick: pocketLock }, '🔒', h('span', { class: 'lbl' }, ' Pocket lock')),
       h('button', { class: 'ghost', title: 'Settings', 'aria-label': 'Settings', onclick: settings }, '⚙', h('span', { class: 'lbl' }, ' Settings'))),
     h('div', { class: 'wrap' }, ui.warn, ui.audio, h('h2', {}, 'Rooms'), ui.rooms, h('h2', {}, 'Program feeds'), ui.feeds),
     h('div', { class: 'bar' }, h('div', { class: 'in' },
-      h('div', {}, h('label', {}, h('span', {}, 'Listening volume')), lv),
+      h('div', {}, h('label', {}, h('span', {}, 'Listening volume')), lv, masterMeter.el),
       h('div', {}, h('label', {}, h('span', {}, 'Microphone volume'), micPct), mv, ui.micRow))));
   if (!supported) ui.warn.append(h('div', { class: 'warn' }, 'This browser lacks WebCodecs audio. Use a current Chrome, Edge, Firefox or Safari 26+.'));
   if (!window.isSecureContext) ui.warn.append(h('div', { class: 'warn' }, 'Microphone needs HTTPS. Open this page over https://.'));
@@ -110,7 +113,7 @@ function connect() {
   if (ws) { ws.onclose = null; try { ws.close(); } catch {} S.talking.clear(); stopSending(); }   // the server drops talk state with the old connection
   const w = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   w.binaryType = 'arraybuffer';
-  w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); };
+  w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); startClockSync(); };
   w.onmessage = (e) => {
     lastRx = Date.now();
     if (typeof e.data !== 'string') return engine.receive(e.data);
@@ -130,6 +133,15 @@ function connect() {
     if (Date.now() - lastRx > 45000) return ws.close();
     send({ t: 'ping' });
   }, 15000);
+}
+// Measure this device's clock against the server's: a quick burst, then every 5 s. Used to play the program
+// feed at the same instant as every other listener.
+engine.onClockTrouble = () => { if (S.connected) startClockSync(); };
+function startClockSync() {
+  clearInterval(syncTimer);   // (existing measurements are kept: they stay valid, and a real clock jump is detected from fresh ones)
+  const ping = () => send({ t: 'sync', c: performance.now() });
+  let n = 0; ping();
+  syncTimer = setInterval(() => { ping(); if (++n === 8) { clearInterval(syncTimer); syncTimer = setInterval(ping, 5000); } }, 150);
 }
 const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
 function setConn(on) { S.connected = on; ui.dot?.classList.toggle('on', on); }
@@ -155,6 +167,7 @@ async function recover(awayMs) {
   // The phone may have stopped the microphone while the app was away.
   if (voice && voice.track && voice.track.readyState !== 'live') await closeMic();
   if (S.rooms.some((r) => r.talk)) ensureMic();
+  if (ws && ws.readyState === 1) startClockSync();   // the device clock may have lost time while away: measure it again
   audioBanner();
 }
 
@@ -162,6 +175,7 @@ function onMsg(m) {
   switch (m.t) {
     case 'state': {
       const rooms = m.rooms || [], feeds = m.feeds || [];   // a user with no access gets empty lists, never null
+      if (m.feedDelayMs) engine.feedDelayMs = m.feedDelayMs;
       S.rooms = rooms; S.feeds = feeds; S.c = m.you.c; S.me = { ...S.me, displayName: m.you.name, role: m.you.role };
       if (ui.who) ui.who.textContent = m.you.name;   // an admin may rename this user while they are connected
       engine.registerChannels(rooms, feeds);
@@ -186,6 +200,7 @@ function onMsg(m) {
       if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
       break;
     }
+    case 'sync': engine.clock.add(m.c, m.s, performance.now()); break;
     case 'presence': S.presence = m; update(); break;
     case 'publish': if (!m.on && S.publishing === m.feed) stopPublish(true); break;
     case 'error': toast(m.msg); break;
@@ -196,13 +211,13 @@ function onMsg(m) {
 function render() {
   const s = JSON.stringify([S.rooms, S.feeds]);
   if (s === sig) return update();
-  sig = s; cards.clear();
+  sig = s; cards.clear(); for (const k of [...meters.keys()]) if (k !== 'master') meters.delete(k);
   ui.rooms.replaceChildren(...(S.rooms.length ? S.rooms.map(roomCard) : [h('p', { class: 'sub' }, 'No rooms available to you yet. Ask an admin for access.')]));
   ui.feeds.replaceChildren(...(S.feeds.length ? S.feeds.map(feedCard) : [h('p', { class: 'sub' }, 'No program feeds available.')]));
   update();
 }
 
-function update() { for (const c of cards.values()) c(); audioBanner(); }
+function update() { for (const c of cards.values()) c(); audioBanner(); pipDraw(); }
 
 // Browsers only start audio after a tap/click. Rooms remembered from a previous visit are re-joined
 // automatically, so without this the room looks joined while nothing is actually playing.
@@ -236,13 +251,14 @@ function roomCard(r) {
     persist(); update();
   } });
   const btn = r.talk ? talkButton(r) : null;
+  const mt = addMeter('r' + r.id, () => engine.level('room', r.id));
   const el = h('section', { class: 'card room', style: `--c:${r.color}` },
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), h('div', { class: 'sub' }, r.talk ? 'Listen & talk' : 'Listen only')),
       h('label', { class: 'sw' }, sw, h('i'))),
-    chips, h('div', { class: 'sub' }, 'Room volume'), vol, btn);
+    chips, h('div', { class: 'sub' }, 'Room volume'), vol, mt.el, btn);
   cards.set(r.id, () => {
     const on = S.joined.has(r.id);
-    sw.checked = on; el.classList.toggle('joined', on);
+    sw.checked = on; el.classList.toggle('joined', on); mt.el.hidden = !on;
     const ms = S.presence.rooms?.[r.id] || [];
     // Everyone in the room is listed, and whoever is speaking lit up, whether or not you have joined it yourself.
     chips.replaceChildren(...(ms.length ? ms.map((m) => h('span', { class: 'chip' + (m.t ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, 'Nobody here')]));
@@ -335,6 +351,32 @@ function setMeter(l) {
   ui.mic.style.width = (100 - Math.max(0, Math.min(100, ((db + 60) / 60) * 100))) + '%';
 }
 
+// A dB meter for something you hear (a room, the program feed, everything): -60 dBFS at the left to 0 at the right, the
+// same colour bands as the microphone meter, a number, and a peak tick that holds for a second. It rises at once and
+// falls steadily, like a VU meter.
+function makeMeter() {
+  const mask = h('b'), tick = h('i'), txt = h('span', { class: 'mdb', title: 'dBFS' }, '');
+  const el = h('div', { class: 'meterrow' }, h('div', { class: 'meter sm' }, mask, tick), txt);
+  let disp = -90, peak = -90, peakAt = 0, last = 0;
+  const pct = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+  return { el, update(rms, pk, now) {
+    const dt = last ? Math.min(0.2, (now - last) / 1000) : 0.016; last = now;
+    disp = Math.max(Number.isFinite(rms) ? rms : -90, disp - 28 * dt);
+    if (pk > peak) { peak = pk; peakAt = now; } else if (now - peakAt > 1000) peak = Math.max(disp, peak - 20 * dt);
+    mask.style.width = (100 - pct(disp)) + '%';
+    tick.style.left = pct(peak) + '%'; tick.style.display = peak > -58 ? 'block' : 'none';
+    txt.textContent = disp > -58 ? Math.round(disp) + ' dB' : '';
+  } };
+}
+const meters = new Map();   // key -> { m, get, el }
+let meterRaf = 0;
+function meterLoop(now) {
+  meterRaf = requestAnimationFrame(meterLoop);
+  for (const x of meters.values()) { if (x.m.el.hidden || !engine.ctx) continue; const lv = x.get(); x.m.update(lv.rms, lv.peak, now); }
+}
+function addMeter(key, get) { const m = makeMeter(); meters.set(key, { m, get }); return m; }
+if (!meterRaf) meterRaf = requestAnimationFrame(meterLoop);
+
 // Voice detection, run on every 20 ms mic frame: tells the room who is actually speaking (as opposed to
 // merely having talk switched on). The noise floor is tracked so quiet rooms and noisy rooms both work.
 const vad = { floor: 0.01, on: false, run: 0, quiet: 0 };
@@ -371,7 +413,8 @@ function feedCard(f) {
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.feedVol[f.id] ?? 1,
     oninput: (e) => { prefs.feedVol[f.id] = +e.target.value; savePrefs(); applyVol('feed', f.id, prefs.feedVol[f.id]); } });
   // Listener controls. Hidden while this device is the sender: the server never plays a feed back to its own sender.
-  const volBox = h('div', {}, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol);
+  const fm = addMeter('f' + f.id, () => engine.level('feed', f.id));
+  const volBox = h('div', {}, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol, fm.el);
   const play = h('button', { class: 'primary', onclick: async () => {
     if (S.listening.has(f.id)) { if (!prefs.feedsOff.includes(f.id)) prefs.feedsOff.push(f.id); S.listening.delete(f.id); send({ t: 'listen', feed: f.id, on: false }); engine.stopChannel('feed', f.id); }
     else { prefs.feedsOff = prefs.feedsOff.filter((x) => x !== f.id); engine.startChannel('feed', f.id); S.listening.add(f.id); send({ t: 'listen', feed: f.id, on: true }); await engine.start(); applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1); }
@@ -389,6 +432,7 @@ function feedCard(f) {
     live.textContent = p.live ? '● LIVE' : 'OFFLINE'; live.classList.toggle('live', !!p.live);
     n.textContent = `${p.n || 0} listening`;
     const on = S.listening.has(f.id);
+    fm.el.hidden = !on;
     play.textContent = on ? '■ Stop listening' : '▶ Listen';
     const sending = S.publishing === f.id;
     volBox.hidden = sending; play.hidden = sending;
@@ -434,6 +478,69 @@ function stopPublish(fromServer) {
   update();
 }
 
+// ----- floating "who is talking" window (Picture-in-Picture) -----
+// A small always-on-top window, like a video, so you can use other apps and still see who is speaking. A phone cannot
+// float arbitrary buttons, only video, so the status is drawn on a canvas and shown as a video.
+const pip = { video: null, canvas: null, g: null, track: null, on: false };
+function pipSupported() {
+  return !!HTMLCanvasElement.prototype.captureStream && !!(document.pictureInPictureEnabled || HTMLVideoElement.prototype.webkitSetPresentationMode);
+}
+// What to show: the rooms you have joined (the ones you can hear), rooms with someone speaking first.
+function pipModel() {
+  const rows = S.rooms.filter((r) => S.joined.has(r.id)).map((r, i) => {
+    const ms = S.presence.rooms?.[r.id] || [];
+    return { id: r.id, name: r.name, color: r.color, here: ms.length, order: i, speakers: ms.filter((m) => m.t).map((m) => (m.c === S.c ? 'You' : m.n)) };
+  });
+  rows.sort((a, b) => (b.speakers.length > 0) - (a.speakers.length > 0) || a.order - b.order);
+  return { live: S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name), rows };
+}
+function pipDraw(force) {
+  if (!pip.on && !force) return;
+  if (!pip.canvas) { pip.canvas = document.createElement('canvas'); pip.canvas.width = 480; pip.canvas.height = 270; }
+  const g = pip.g = pip.g || pip.canvas.getContext('2d'), W = 480, H = 270, m = pipModel();
+  const fit = (t, px, maxW) => { g.font = px; if (g.measureText(t).width <= maxW) return t; while (t.length > 1 && g.measureText(t + '…').width > maxW) t = t.slice(0, -1); return t + '…'; };
+  g.fillStyle = '#0b0d12'; g.fillRect(0, 0, W, H);
+  // header: red and clear when your own mic is live
+  g.fillStyle = m.live.length ? '#dc2626' : '#151922'; g.fillRect(0, 0, W, 40);
+  g.textBaseline = 'middle'; g.fillStyle = m.live.length ? '#fff' : '#8a93a6'; g.font = '600 20px system-ui, sans-serif';
+  g.fillText(fit(m.live.length ? '● You are live: ' + m.live.join(', ') : 'NetSpeak', g.font, W - 24), 12, 21);
+  if (!m.rows.length) { g.fillStyle = '#8a93a6'; g.font = '500 24px system-ui, sans-serif'; g.fillText('Not in any room', 12, 100); }
+  const maxRows = 4, rowH = 56, shown = m.rows.length > maxRows ? m.rows.slice(0, maxRows - 1) : m.rows;
+  shown.forEach((r, i) => {
+    const y = 48 + i * rowH, talking = r.speakers.length > 0;
+    if (talking) { g.fillStyle = 'rgba(74,222,128,0.14)'; g.fillRect(0, y, W, rowH - 4); }
+    g.fillStyle = r.color; g.fillRect(0, y, 8, rowH - 4);
+    g.fillStyle = talking ? '#e8ecf4' : '#aab3c5'; g.font = '600 21px system-ui, sans-serif';
+    g.fillText(fit(r.name, g.font, 150), 22, y + 26);
+    if (talking) { g.fillStyle = '#4ade80'; g.font = '700 27px system-ui, sans-serif'; g.fillText(fit(r.speakers.join(', '), g.font, W - 190), 180, y + 26); }
+    else { g.fillStyle = '#6b7487'; g.font = '500 18px system-ui, sans-serif'; g.fillText(r.here ? r.here + (r.here === 1 ? ' person here' : ' people here') : 'empty', 180, y + 26); }
+  });
+  if (m.rows.length > maxRows) { const rest = m.rows.length - (maxRows - 1); g.fillStyle = '#8a93a6'; g.font = '500 19px system-ui, sans-serif'; g.fillText('+' + rest + ' more room' + (rest === 1 ? '' : 's'), 22, 48 + (maxRows - 1) * rowH + 24); }
+  if (pip.track && pip.track.requestFrame) pip.track.requestFrame();   // push the new picture out at once
+}
+async function pipToggle() {
+  try {
+    if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return; }
+    if (pip.video && pip.video.webkitPresentationMode === 'picture-in-picture') { pip.video.webkitSetPresentationMode('inline'); return; }
+    if (!pipSupported()) return toast('A floating window is not supported by this browser.');
+    if (!pip.video) {
+      pipDraw(true);
+      const stream = pip.canvas.captureStream(5);
+      pip.track = stream.getVideoTracks()[0];
+      const v = pip.video = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.srcObject = stream;
+      v.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      v.addEventListener('enterpictureinpicture', () => { pip.on = true; pipDraw(); });
+      v.addEventListener('leavepictureinpicture', () => { pip.on = false; });
+      v.addEventListener('webkitpresentationmodechanged', () => { pip.on = v.webkitPresentationMode === 'picture-in-picture'; });
+      document.body.append(v);
+    }
+    pip.on = true; pipDraw(true);
+    await pip.video.play();
+    if (pip.video.requestPictureInPicture) await pip.video.requestPictureInPicture(); else pip.video.webkitSetPresentationMode('picture-in-picture');
+  } catch (e) { pip.on = false; toast('Could not open the floating window: ' + e.message); }
+}
+
 // ----- settings -----
 async function settings() {
   let ins = [], outs = [];
@@ -455,6 +562,7 @@ async function settings() {
       `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
       `echo cancel:  ${engine.aecOff ? 'OFF: this device was too busy' : S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
       `feedback:     ${S.fb ? `${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : 'none detected'}`,
+      `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
     ].join('\n');
   };
@@ -485,6 +593,7 @@ function updateMediaSession() {
   const on = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
   // Earbud click arrives as play/pause: use it as a latch-talk toggle.
   on('pause', earbudToggle); on('play', () => { engine.resume(); earbudToggle(); });
+  on('enterpictureinpicture', () => pipToggle());   // browsers that offer it when you leave while on a call
   on('togglemicrophone', earbudToggle); on('hangup', () => { for (const id of [...S.talking]) talkStop(id); });
   on('nexttrack', () => { const t = S.rooms.filter((r) => S.joined.has(r.id)); if (t.length) { S.active = t[(t.findIndex((r) => r.id === S.active) + 1) % t.length].id; toast('Active room: ' + t.find((r) => r.id === S.active).name); } });
   try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
@@ -518,5 +627,5 @@ function pocketLock() {
   document.body.append(o);
 }
 
-window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms), setMeter };
+window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms), setMeter, pip: { model: () => pipModel(), draw: () => pipDraw(true), canvas: () => pip.canvas } };
 boot();
