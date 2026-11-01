@@ -41,6 +41,14 @@ type feedState struct {
 	haveSeq bool
 }
 
+// watchGap logs when a feed's packets stop arriving at the server for a while. That points at the sender (or its own
+// connection), not at any listener: a listener's skips are then not the listener's fault.
+func (fs *feedState) watchGap(feedID string, now time.Time) {
+	if !fs.last.IsZero() && now.Sub(fs.last) > 150*time.Millisecond && now.Sub(fs.last) < 10*time.Second {
+		log.Printf("feed %s: no packets from the sender for %d ms (sender or its connection)", feedID, now.Sub(fs.last).Milliseconds())
+	}
+}
+
 type outMsg struct {
 	typ  int
 	data []byte
@@ -213,13 +221,20 @@ func itoa(n uint16) string {
 func (c *Client) writeLoop() {
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
+	var lastSlow time.Time
 	for {
 		select {
 		case m := <-c.send:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			t0 := time.Now()
+			_ = c.conn.SetWriteDeadline(t0.Add(10 * time.Second))
 			if c.conn.WriteMessage(m.typ, m.data) != nil {
 				c.close()
 				return
+			}
+			// A write that takes long means the path to this listener (its network, or the reverse proxy in front) is stalled.
+			if d := time.Since(t0); d > 150*time.Millisecond && time.Since(lastSlow) > 2*time.Second {
+				lastSlow = time.Now()
+				log.Printf("listener %s: sending blocked for %d ms, %d packets waiting (this listener's network or the reverse proxy)", c.user.Username, d.Milliseconds(), len(c.send))
 			}
 		case <-tick.C:
 			_ = c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
@@ -385,6 +400,7 @@ func (h *Hub) feedPacket(feedID string, pkt []byte) {
 	fs.seq++
 	seq := fs.seq
 	now := time.Now()
+	fs.watchGap(feedID, now)
 	fs.last = now
 	stamp := fs.clock.stamp(now.UnixMicro(), opusDuration(pkt).Microseconds())
 	h.mu.Unlock()
@@ -439,6 +455,7 @@ func (h *Hub) route(c *Client, data []byte) {
 		h.mu.Lock()
 		if fs := h.feeds[ref.id]; fs != nil && fs.source == "ws:"+itoa(c.id) {
 			now := time.Now()
+			fs.watchGap(ref.id, now)
 			fs.last = now
 			seq := binary.BigEndian.Uint32(data[3:7])
 			if fs.haveSeq && seq != fs.lastSeq+1 { // packets are missing: the source paused, so stamp from scratch

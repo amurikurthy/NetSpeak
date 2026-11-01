@@ -139,7 +139,7 @@ ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=2
 
 The key is shown in Admin, Feeds, Ingest. Use 20 ms frames. Opus is lossy, but at 192 kbps it is transparent for monitoring. It is not bit-exact PCM.
 
-**Settings** (in the app): microphone and speaker choice, keep screen on, Diagnostics, reload, sign out. People cannot change their own name or password: only an admin can, under Admin, Users. The signed-in name is shown under the app name in the top bar. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller, the feedback suppressor and the program-feed clock sync, which is the first place to look when something sounds wrong.
+**Settings** (in the app): microphone and speaker choice, keep screen on, Diagnostics, reload, sign out. People cannot change their own name or password: only an admin can, under Admin, Users. The signed-in name is shown under the app name in the top bar. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller, the feedback suppressor and the program-feed clock sync, which is the first place to look when something sounds wrong. For program audio, the "feed health" line shows how often the buffer ran dry and the longest gap between packets. If that gap is large, `docker compose logs netspeak` says where the stall is: either "no packets from the sender" (the sender or its connection) or "sending blocked" for a listener (that listener's network, or the reverse proxy in front).
 
 ## How it works
 
