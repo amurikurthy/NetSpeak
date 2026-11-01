@@ -28,6 +28,8 @@ export class Engine {
     this.captures = new Map(); // name -> Capture
     this.sinkId = '';
     this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0, syncDrops: 0, syncCorr: 0 };
+    this.syncFallbackUntil = 0;     // while now < this, the feed plays unsynchronised (the clock mapping looked broken)
+    this.onClockTrouble = null;     // asked to re-measure the clock
     this.inactive = new Set();      // channels the user stopped: packets still in flight for them are ignored
     this.clock = new ClockSync();   // this device's clock vs the server's
     this.feedDelayMs = 250;         // set by the server: every device plays program audio this long after its stamp
@@ -119,7 +121,7 @@ export class Engine {
     const ref = this.chans.get(ch);
     if (!ref || this.inactive.has(ref.kind + ':' + ref.id)) return;
     const key = ch + ':' + sender;
-    if (type === 2 && this.clock.ready) {
+    if (type === 2 && this.clock.ready && performance.now() >= this.syncFallbackUntil) {
       // A backlog (the page was throttled and a burst arrives at once): packets already past their play time can only
       // be skipped, so skip them before spending any effort decoding.
       const lateMs = performance.now() + this.clock.offset - Number(dv.getBigUint64(9)) / 1000 - this.feedDelayMs;
@@ -149,6 +151,21 @@ export class Engine {
     });
     v.dec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: feed ? 2 : 1 });
     return v;
+  }
+
+  // If most chunks are being skipped or nudged, the clock mapping is wrong (the device slept, the clock estimate went stale).
+  // Never go silent or warble because of it: play unsynchronised for a few seconds and re-measure the clock meanwhile.
+  syncHealth(v, bad) {
+    const h = v.health || (v.health = { n: 0, bad: 0 });
+    h.n++; if (bad) h.bad++;
+    if (h.n < 50) return;
+    const unhealthy = h.bad > 30; h.n = 0; h.bad = 0;
+    if (!unhealthy) return;
+    this.stats.syncFallbacks = (this.stats.syncFallbacks || 0) + 1;
+    this.syncFallbackUntil = performance.now() + 3000;
+    this.clock.reset();
+    for (const o of this.voices.values()) if (o.sp) o.sp.next = null;
+    if (this.onClockTrouble) this.onClockTrouble();
   }
 
   // Cancel everything this voice has queued and forget its timeline.
@@ -186,14 +203,17 @@ export class Engine {
     data.close();
     const now = ctx.currentTime;
     let when, slip = 0;
-    if (feed && this.clock.ready && v.sp) {
+    if (feed && this.clock.ready && v.sp && performance.now() >= this.syncFallbackUntil) {
       // Synchronised: sound this chunk exactly feedDelayMs after its server stamp, like every other listener.
+      if (v.legacy) { v.legacy = false; v.sp.next = null; }
       const r = v.sp.plan(this.serverToCtx(stampUs / 1000 + this.feedDelayMs), now, n);
       this.stats.syncCorr = (this.stats.syncCorr || 0) + (r.slip ? 1 : 0);
+      this.syncHealth(v, r.drop || r.slip !== 0 || r.when - now > 1.0);
       if (r.drop) { this.stats.syncDrops++; return; }   // too late to play in sync: skip it
       when = r.when; slip = r.slip;
     } else {
       // Not synchronised yet (first moments after connecting) or a room voice: simple low-delay queue.
+      if (feed) v.legacy = true;
       const target = this.jitter[feed ? 'feed' : 'room'];
       if (v.next < now + 0.01 || v.next > now + target * 4 + 0.3) v.next = now + target;   // resync when we underrun or drift far ahead
       when = v.next; v.next += n / 48000;

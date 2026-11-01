@@ -15,14 +15,22 @@ export class ClockSync {
   add(sent, serverMs, recv) {
     const rtt = recv - sent;
     if (!(rtt >= 0) || rtt > 3000) return;
-    this.samples.push({ rtt, off: serverMs + rtt / 2 - recv });
+    const off = serverMs + rtt / 2 - recv;
+    // A device that sleeps can lose time on its monotonic clock, which makes every older measurement wrong by the same
+    // amount. Spot it: three fresh measurements that agree with each other but not with what we had. Start over from them.
+    this.recent = (this.recent || []).concat({ rtt, off }).slice(-3);
+    if (this.offset !== null && this.recent.length === 3) {
+      const offs = this.recent.map((s) => s.off), mean = (offs[0] + offs[1] + offs[2]) / 3;
+      if (Math.max(...offs) - Math.min(...offs) < 8 && Math.abs(mean - this.offset) > 25) this.samples = [...this.recent];
+    }
+    this.samples.push({ rtt, off });
     if (this.samples.length > 12) this.samples.shift();
     // The quickest round trips are the least disturbed by queuing. Use the median of the best three.
     const best = [...this.samples].sort((a, b) => a.rtt - b.rtt).slice(0, 3).sort((a, b) => a.off - b.off);
     this.offset = best[Math.floor(best.length / 2)].off;
     this.rtt = best[0].rtt;
   }
-  reset() { this.samples = []; this.offset = null; this.rtt = null; }   // after an absence the old measurements are wrong
+  reset() { this.samples = []; this.recent = []; this.offset = null; this.rtt = null; }   // after an absence the old measurements are wrong
   get ready() { return this.offset !== null && this.samples.length >= 3; }
   // Worst-case error from path asymmetry is half the best round trip.
   get uncertaintyMs() { return this.rtt === null ? Infinity : this.rtt / 2; }
@@ -42,7 +50,8 @@ export class SyncPlayout {
   // desired: audio-clock time this chunk is due; now: audio-clock time now; n: its length in samples.
   plan(desired, now, n) {
     let when, slip = 0;
-    if (this.next === null || Math.abs(desired - this.next) > 0.12) {
+    // A timing error beyond 15 ms is not worth stretching audio for (that sounds like warble for a long time): jump instead.
+    if (this.next === null || Math.abs(desired - this.next) > 0.015) {
       if (this.next !== null) this.stats.reanchors++;
       if (desired < now - 0.02) { this.stats.drops++; this.next = null; return { drop: true, when: desired, slip: 0 }; }
       when = Math.max(desired, now + 0.002);

@@ -107,6 +107,7 @@ async function appView() {
 
 function connect() {
   clearTimeout(wsTimer);
+  if (S.publishing) S.republish = true;   // the server forgets a sender when its connection ends: announce it again once the new one is up
   if (ws) { ws.onclose = null; try { ws.close(); } catch {} S.talking.clear(); stopSending(); }   // the server drops talk state with the old connection
   const w = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   w.binaryType = 'arraybuffer';
@@ -133,6 +134,7 @@ function connect() {
 }
 // Measure this device's clock against the server's: a quick burst, then every 5 s. Used to play the program
 // feed at the same instant as every other listener.
+engine.onClockTrouble = () => { if (S.connected) startClockSync(); };
 function startClockSync() {
   clearInterval(syncTimer); engine.clock.reset();
   const ping = () => send({ t: 'sync', c: performance.now() });
@@ -163,6 +165,7 @@ async function recover(awayMs) {
   // The phone may have stopped the microphone while the app was away.
   if (voice && voice.track && voice.track.readyState !== 'live') await closeMic();
   if (S.rooms.some((r) => r.talk)) ensureMic();
+  if (ws && ws.readyState === 1) startClockSync();   // the device clock may have lost time while away: measure it again
   audioBanner();
 }
 
@@ -189,6 +192,7 @@ function onMsg(m) {
       if (S.publishing && !fids.has(S.publishing)) stopPublish(false);
       persist();
       render();
+      if (S.republish) { S.republish = false; const f = feeds.find((x) => x.id === S.publishing); if (f && f.source) startPublish(f, S.pubDevice); else if (S.publishing) stopPublish(true); }
       for (const id of [...S.calls]) { if (!S.talking.has(id)) talkStart(id); }
       if (rooms.some((r) => r.talk)) ensureMic(); else closeMic();   // mic stays open while the user can talk anywhere
       if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
@@ -424,6 +428,7 @@ async function publishDialog(f) {
   document.body.append(sheet);
 }
 async function startPublish(f, deviceId) {
+  S.pubDevice = deviceId;   // remembered so sending can resume by itself after the connection is replaced
   try {
     await engine.start(); engine.resume();
     send({ t: 'publish', feed: f.id, on: true });
