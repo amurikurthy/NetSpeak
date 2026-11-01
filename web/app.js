@@ -572,6 +572,7 @@ function pipDraw(force, tick) {
 function pipOn(on) {
   pip.on = on; clearTimeout(pip.timer); pip.timer = 0;
   if (!on) return;
+  try { navigator.mediaSession.setPositionState(); } catch {}
   pip.ms = PIP_FAST; pip.slow = 0; pip.tickAt = 0; pip.baseOk = false; pipDraw();
   const loop = () => {
     const t = performance.now();
@@ -593,7 +594,7 @@ async function pipToggle() {
       const stream = pip.canvas.captureStream(30);
       pip.track = stream.getVideoTracks()[0];
       const v = pip.video = document.createElement('video');
-      v.muted = true; v.playsInline = true; v.srcObject = stream;
+      v.muted = true; v.playsInline = true; v.disableRemotePlayback = true; v.controls = false; v.srcObject = stream;
       v.width = 480; v.height = 270;   // 16:9, the same shape as the picture, in case the browser sizes the window from the element
       v.style.cssText = 'position:fixed;left:0;bottom:0;width:32px;height:18px;opacity:0;pointer-events:none';
       v.addEventListener('enterpictureinpicture', () => pipOn(true));
@@ -661,6 +662,10 @@ function updateMediaSession() {
   const on = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
   // Earbud click arrives as play/pause: use it as a latch-talk toggle.
   on('pause', earbudToggle); on('play', () => { engine.resume(); earbudToggle(); });
+  // This is a live intercom, not a recording: no position, no scrubbing. Clearing these asks the phone to drop the
+  // timeline bar from its media controls and from the floating window.
+  try { navigator.mediaSession.setPositionState(); } catch {}
+  on('seekto', null); on('seekbackward', null); on('seekforward', null);
   on('enterpictureinpicture', () => pipToggle());   // browsers that offer it when you leave while on a call
   on('togglemicrophone', earbudToggle); on('hangup', () => { for (const id of [...S.talking]) talkStop(id); });
   on('nexttrack', () => { const t = S.rooms.filter((r) => S.joined.has(r.id)); if (t.length) { S.active = t[(t.findIndex((r) => r.id === S.active) + 1) % t.length].id; toast('Active room: ' + t.find((r) => r.id === S.active).name); } });
