@@ -463,7 +463,9 @@ async function publishDialog(f) {
     } }, 'Start sending'), h('button', { onclick: close }, 'Cancel'))));
   document.body.append(sheet);
 }
+const sendStat = { last: 0, gap: 0, backlog: 0 };   // while sending a feed: longest wait between frames leaving this page, and the most data stuck behind a slow connection
 async function startPublish(f, deviceId) {
+  sendStat.last = 0; sendStat.gap = 0; sendStat.backlog = 0;
   S.pubDevice = deviceId;   // remembered so sending can resume by itself after the connection is replaced
   try {
     await engine.start(); engine.resume();
@@ -471,7 +473,9 @@ async function startPublish(f, deviceId) {
     const ch = f.ch;
     const cap = await engine.capture('feed', { channels: 2, bitrate: 192000, application: 'audio', deviceId, gain: prefs.feedGain, ec: false, ns: false, agc: false, hpf: 0, gate: false, compressor: true,
       onLevel: (l) => setMeter(l),
-      onFrame: (seq, d) => { if (!ws || ws.readyState !== 1) return; const m = new Uint8Array(7 + d.length), dv = new DataView(m.buffer); dv.setUint8(0, 1); dv.setUint16(1, ch); dv.setUint32(3, seq); m.set(d, 7); ws.send(m); } });
+      onFrame: (seq, d) => { if (!ws || ws.readyState !== 1) return;
+        const tn = performance.now(); if (sendStat.last) sendStat.gap = Math.max(sendStat.gap, Math.round(tn - sendStat.last)); sendStat.last = tn; sendStat.backlog = Math.max(sendStat.backlog, ws.bufferedAmount);   // sender-side stall evidence
+        const m = new Uint8Array(7 + d.length), dv = new DataView(m.buffer); dv.setUint8(0, 1); dv.setUint16(1, ch); dv.setUint32(3, seq); m.set(d, 7); ws.send(m); } });
     cap.sending = true; S.publishing = f.id; update();
   } catch (e) { send({ t: 'publish', feed: f.id, on: false }); toast('Could not start: ' + e.message); }
 }
@@ -586,9 +590,10 @@ async function settings() {
       `echo cancel:  ${engine.aecOff ? 'OFF: this device was too busy' : S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
       `feedback:     ${S.fb ? `${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : 'none detected'}`,
       `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
+      S.publishing && `sending:      longest gap between frames leaving this page ${sendStat.gap} ms · most data waiting to upload ${Math.round(sendStat.backlog / 1024)} KB`,
       `feed health:  buffer ran dry ${[...engine.voices.values()].reduce((a, v) => a + (v.sp ? v.sp.stats.dry : 0), 0)}x (worst ${Math.max(0, ...[...engine.voices.values()].map((v) => v.sp ? v.sp.stats.dryMaxMs : 0))} ms) · longest gap between packets ${st.gapMax || 0} ms · longest page stall ${lagMax} ms`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   };
   tick(); const dt = setInterval(tick, 500);
   const close = () => { clearInterval(dt); sheet.remove(); };
