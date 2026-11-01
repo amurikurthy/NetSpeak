@@ -84,7 +84,7 @@ async function appView() {
   ui.who = h('div', { class: 'who' }, S.me.displayName);
   ui.rooms = h('div'); ui.feeds = h('div'); ui.warn = h('div');
   ui.audio = h('div', { class: 'warn', hidden: true, style: 'cursor:pointer;font-weight:600', onclick: () => enableAudio() }, '🔇 Audio is off: tap here to start listening');
-  ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);   // ui.mic is the mask over the unlit part of the bar
+  ui.micMeter = makeMeter(); ui.micRow = ui.micMeter.el;
   const masterMeter = addMeter('master', () => engine.masterLevel());
   const micPct = h('span', {}, Math.round(prefs.micGain * 100) + '%');
   const mv = h('input', { type: 'range', min: 0, max: 1.25, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; micPct.textContent = Math.round(prefs.micGain * 100) + '%'; savePrefs(); voice?.setGain(prefs.micGain); } });
@@ -346,17 +346,17 @@ async function closeMic() { if (voice) { const v = voice; voice = null; await en
 // Level meter in dB: -60 dBFS at the left edge to 0 dBFS at the right. The colour bands are fixed on the bar
 // (green, yellow from -24 dB, orange from -15 dB, red from -6 dB); the level only decides how much is lit.
 function setMeter(l) {
-  if (!ui.mic) return;
+  if (!ui.micMeter) return;
   const db = 20 * Math.log10(Math.max(Number.isFinite(l) ? l : 0, 1e-5));
-  ui.mic.style.width = (100 - Math.max(0, Math.min(100, ((db + 60) / 60) * 100))) + '%';
+  ui.micMeter.update(db, db, performance.now());
 }
 
 // A dB meter for something you hear (a room, the program feed, everything): -60 dBFS at the left to 0 at the right, the
-// same colour bands as the microphone meter, a number, and a peak tick that holds for a second. It rises at once and
+// same look as the microphone meter: colour bands and a white peak tick that holds for a second. It rises at once and
 // falls steadily, like a VU meter.
 function makeMeter() {
-  const mask = h('b'), tick = h('i'), txt = h('span', { class: 'mdb', title: 'dBFS' }, '');
-  const el = h('div', { class: 'meterrow' }, h('div', { class: 'meter sm' }, mask, tick), txt);
+  const mask = h('b'), tick = h('i');
+  const el = h('div', { class: 'meter' }, mask, tick);
   let disp = -90, peak = -90, peakAt = 0, last = 0;
   const pct = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
   return { el, update(rms, pk, now) {
@@ -365,13 +365,17 @@ function makeMeter() {
     if (pk > peak) { peak = pk; peakAt = now; } else if (now - peakAt > 1000) peak = Math.max(disp, peak - 20 * dt);
     mask.style.width = (100 - pct(disp)) + '%';
     tick.style.left = pct(peak) + '%'; tick.style.display = peak > -58 ? 'block' : 'none';
-    txt.textContent = disp > -58 ? Math.round(disp) + ' dB' : '';
   } };
 }
 const meters = new Map();   // key -> { m, get, el }
 let meterRaf = 0;
+let lagMax = 0;   // longest time the page's main thread was stuck, measured with a 50 ms timer
+{ let t = performance.now(); setInterval(() => { const n = performance.now(); lagMax = Math.max(lagMax, Math.round(n - t - 50)); t = n; }, 50); }
+let meterAt = 0;
 function meterLoop(now) {
   meterRaf = requestAnimationFrame(meterLoop);
+  if (now - meterAt < 33) return;   // about 30 updates a second is plenty and keeps the page's main thread free for audio
+  meterAt = now;
   for (const x of meters.values()) { if (x.m.el.hidden || !engine.ctx) continue; const lv = x.get(); x.m.update(lv.rms, lv.peak, now); }
 }
 function addMeter(key, get) { const m = makeMeter(); meters.set(key, { m, get }); return m; }
@@ -481,7 +485,7 @@ function stopPublish(fromServer) {
 // ----- floating "who is talking" window (Picture-in-Picture) -----
 // A small always-on-top window, like a video, so you can use other apps and still see who is speaking. A phone cannot
 // float arbitrary buttons, only video, so the status is drawn on a canvas and shown as a video.
-const pip = { video: null, canvas: null, g: null, track: null, on: false };
+const pip = { video: null, canvas: null, g: null, track: null, on: false, timer: 0, disp: -90, peak: -90, peakAt: 0, last: 0 };
 function pipSupported() {
   return !!HTMLCanvasElement.prototype.captureStream && !!(document.pictureInPictureEnabled || HTMLVideoElement.prototype.webkitSetPresentationMode);
 }
@@ -505,18 +509,37 @@ function pipDraw(force) {
   g.textBaseline = 'middle'; g.fillStyle = m.live.length ? '#fff' : '#8a93a6'; g.font = '600 20px system-ui, sans-serif';
   g.fillText(fit(m.live.length ? '● You are live: ' + m.live.join(', ') : 'NetSpeak', g.font, W - 24), 12, 21);
   if (!m.rows.length) { g.fillStyle = '#8a93a6'; g.font = '500 24px system-ui, sans-serif'; g.fillText('Not in any room', 12, 100); }
-  const maxRows = 4, rowH = 56, shown = m.rows.length > maxRows ? m.rows.slice(0, maxRows - 1) : m.rows;
+  const maxRows = 4, rowH = 50, shown = m.rows.length > maxRows ? m.rows.slice(0, maxRows - 1) : m.rows;
   shown.forEach((r, i) => {
     const y = 48 + i * rowH, talking = r.speakers.length > 0;
     if (talking) { g.fillStyle = 'rgba(74,222,128,0.14)'; g.fillRect(0, y, W, rowH - 4); }
     g.fillStyle = r.color; g.fillRect(0, y, 8, rowH - 4);
     g.fillStyle = talking ? '#e8ecf4' : '#aab3c5'; g.font = '600 21px system-ui, sans-serif';
-    g.fillText(fit(r.name, g.font, 150), 22, y + 26);
-    if (talking) { g.fillStyle = '#4ade80'; g.font = '700 27px system-ui, sans-serif'; g.fillText(fit(r.speakers.join(', '), g.font, W - 190), 180, y + 26); }
-    else { g.fillStyle = '#6b7487'; g.font = '500 18px system-ui, sans-serif'; g.fillText(r.here ? r.here + (r.here === 1 ? ' person here' : ' people here') : 'empty', 180, y + 26); }
+    g.fillText(fit(r.name, g.font, 150), 22, y + 23);
+    if (talking) { g.fillStyle = '#4ade80'; g.font = '700 27px system-ui, sans-serif'; g.fillText(fit(r.speakers.join(', '), g.font, W - 190), 180, y + 23); }
+    else { g.fillStyle = '#6b7487'; g.font = '500 18px system-ui, sans-serif'; g.fillText(r.here ? r.here + (r.here === 1 ? ' person here' : ' people here') : 'empty', 180, y + 23); }
   });
-  if (m.rows.length > maxRows) { const rest = m.rows.length - (maxRows - 1); g.fillStyle = '#8a93a6'; g.font = '500 19px system-ui, sans-serif'; g.fillText('+' + rest + ' more room' + (rest === 1 ? '' : 's'), 22, 48 + (maxRows - 1) * rowH + 24); }
+  if (m.rows.length > maxRows) { const rest = m.rows.length - (maxRows - 1); g.fillStyle = '#8a93a6'; g.font = '500 19px system-ui, sans-serif'; g.fillText('+' + rest + ' more room' + (rest === 1 ? '' : 's'), 22, 48 + (maxRows - 1) * rowH + 21); }
+  // listening level: the same colours, falling and peak line as the meters in the app
+  {
+    const now = performance.now(), lv = engine.ctx ? engine.masterLevel() : { rms: -90, peak: -90 }, dt = pip.last ? Math.min(0.5, (now - pip.last) / 1000) : 0.1; pip.last = now;
+    pip.disp = Math.max(Number.isFinite(lv.rms) ? lv.rms : -90, pip.disp - 28 * dt);
+    if (lv.peak > pip.peak) { pip.peak = lv.peak; pip.peakAt = now; } else if (now - pip.peakAt > 1000) pip.peak = Math.max(pip.disp, pip.peak - 20 * dt);
+    const x = 96, w = W - 12 - x, y = 254, pct = (db) => Math.max(0, Math.min(1, (db + 60) / 60));
+    g.fillStyle = '#8a93a6'; g.font = '500 15px system-ui, sans-serif'; g.fillText('Listening', 12, y + 5);
+    g.fillStyle = '#1c2230'; g.fillRect(x, y, w, 10);
+    const lit = Math.round(w * pct(pip.disp));
+    for (const [from, to, col] of [[0, .6, '#22c55e'], [.6, .75, '#eab308'], [.75, .9, '#f97316'], [.9, 1, '#ef4444']]) {
+      const a = Math.round(w * from), b = Math.min(lit, Math.round(w * to)); if (b > a) { g.fillStyle = col; g.fillRect(x + a, y, b - a, 10); }
+    }
+    if (pip.peak > -58) { g.fillStyle = '#fff'; g.fillRect(x + Math.min(w - 2, Math.round(w * pct(pip.peak))), y, 2, 10); }
+  }
   if (pip.track && pip.track.requestFrame) pip.track.requestFrame();   // push the new picture out at once
+}
+// While the window is open the level meter needs a steady redraw (the rest of the picture only changes on events).
+function pipOn(on) {
+  pip.on = on; clearInterval(pip.timer); pip.timer = 0;
+  if (on) { pipDraw(); pip.timer = setInterval(() => pipDraw(), 100); }
 }
 async function pipToggle() {
   try {
@@ -530,15 +553,15 @@ async function pipToggle() {
       const v = pip.video = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = stream;
       v.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:0;pointer-events:none';
-      v.addEventListener('enterpictureinpicture', () => { pip.on = true; pipDraw(); });
-      v.addEventListener('leavepictureinpicture', () => { pip.on = false; });
-      v.addEventListener('webkitpresentationmodechanged', () => { pip.on = v.webkitPresentationMode === 'picture-in-picture'; });
+      v.addEventListener('enterpictureinpicture', () => pipOn(true));
+      v.addEventListener('leavepictureinpicture', () => pipOn(false));
+      v.addEventListener('webkitpresentationmodechanged', () => pipOn(v.webkitPresentationMode === 'picture-in-picture'));
       document.body.append(v);
     }
-    pip.on = true; pipDraw(true);
+    pipOn(true); pipDraw(true);
     await pip.video.play();
     if (pip.video.requestPictureInPicture) await pip.video.requestPictureInPicture(); else pip.video.webkitSetPresentationMode('picture-in-picture');
-  } catch (e) { pip.on = false; toast('Could not open the floating window: ' + e.message); }
+  } catch (e) { pipOn(false); toast('Could not open the floating window: ' + e.message); }
 }
 
 // ----- settings -----
@@ -563,6 +586,7 @@ async function settings() {
       `echo cancel:  ${engine.aecOff ? 'OFF: this device was too busy' : S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
       `feedback:     ${S.fb ? `${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : 'none detected'}`,
       `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
+      `feed health:  buffer ran dry ${[...engine.voices.values()].reduce((a, v) => a + (v.sp ? v.sp.stats.dry : 0), 0)}x (worst ${Math.max(0, ...[...engine.voices.values()].map((v) => v.sp ? v.sp.stats.dryMaxMs : 0))} ms) · longest gap between packets ${st.gapMax || 0} ms · longest page stall ${lagMax} ms`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
     ].join('\n');
   };

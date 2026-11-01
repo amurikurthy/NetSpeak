@@ -139,7 +139,9 @@ export class Engine {
     const hdr = type === 2 ? 17 : 9;
     if ((type !== 1 && type !== 2) || dv.byteLength <= hdr || !this.ctx) return;
     if (this.ctx.state !== 'running') return;   // phone suspended the sound engine: audio cannot play, so do not queue it
-    this.stats.rx++; this.stats.rxLast = performance.now();
+    const tnow = performance.now();
+    if (this.stats.rxLast && type === 2) { const g = tnow - this.stats.rxLast; if (g > (this.stats.gapMax || 0)) this.stats.gapMax = Math.round(g); }   // longest pause between feed packets (should stay near 20 ms)
+    this.stats.rx++; this.stats.rxLast = tnow;
     const ch = dv.getUint16(1), sender = dv.getUint16(3), seq = dv.getUint32(5);
     const ref = this.chans.get(ch);
     if (!ref || this.inactive.has(ref.kind + ':' + ref.id)) return;

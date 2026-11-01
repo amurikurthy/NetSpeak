@@ -51,7 +51,7 @@ export class SyncPlayout {
     // their play time make it grow (the listener drifts a little out of lockstep, but hears smooth audio instead of gaps);
     // it shrinks again slowly once chunks arrive comfortably early.
     this.extra = 0;
-    this.stats = { drops: 0, reanchors: 0, corrections: 0 };
+    this.stats = { drops: 0, reanchors: 0, corrections: 0, dry: 0, dryMaxMs: 0 };
   }
 
   _anchor(desired0, now, n) {
@@ -85,6 +85,7 @@ export class SyncPlayout {
     let when = this.next;
     if (when < now - 0.005) {                                 // our queue ran dry: this chunk is late for this network
       const late = now - when;
+      this.stats.dry++; this.stats.dryMaxMs = Math.max(this.stats.dryMaxMs, Math.round(late * 1000));
       if (late > 1.0) { this.stats.drops++; this.next = null; return { drop: true, when, slip: 0 }; }
       this.extra = Math.min(1.0, this.extra + late + 0.02);
       when = now + 0.02;
