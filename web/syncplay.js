@@ -22,6 +22,7 @@ export class ClockSync {
     this.offset = best[Math.floor(best.length / 2)].off;
     this.rtt = best[0].rtt;
   }
+  reset() { this.samples = []; this.offset = null; this.rtt = null; }   // after an absence the old measurements are wrong
   get ready() { return this.offset !== null && this.samples.length >= 3; }
   // Worst-case error from path asymmetry is half the best round trip.
   get uncertaintyMs() { return this.rtt === null ? Infinity : this.rtt / 2; }

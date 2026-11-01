@@ -105,7 +105,7 @@ async function appView() {
 
 function connect() {
   clearTimeout(wsTimer);
-  if (ws) { ws.onclose = null; try { ws.close(); } catch {} }
+  if (ws) { ws.onclose = null; try { ws.close(); } catch {} S.talking.clear(); stopSending(); }   // the server drops talk state with the old connection
   const w = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   w.binaryType = 'arraybuffer';
   w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); startClockSync(); };
@@ -132,7 +132,7 @@ function connect() {
 // Measure this device's clock against the server's: a quick burst, then every 5 s. Used to play the program
 // feed at the same instant as every other listener.
 function startClockSync() {
-  clearInterval(syncTimer);
+  clearInterval(syncTimer); engine.clock.reset();
   const ping = () => send({ t: 'sync', c: performance.now() });
   let n = 0; ping();
   syncTimer = setInterval(() => { ping(); if (++n === 8) { clearInterval(syncTimer); syncTimer = setInterval(ping, 5000); } }, 150);
@@ -140,11 +140,28 @@ function startClockSync() {
 const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
 function setConn(on) { S.connected = on; ui.dot?.classList.toggle('on', on); }
 
+// Coming back to the app after swiping away or switching apps. While it was away the phone may have suspended the
+// sound engine, stopped the microphone and silently killed the connection, so repair all of it at once instead of
+// waiting for timeouts.
+let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  engine.resume(); setWake();
-  if (S.me && (!ws || ws.readyState > 1)) connect();
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  recover(hiddenAt ? Date.now() - hiddenAt : 0);
 });
+addEventListener('pageshow', (e) => { if (e.persisted) recover(60000); });   // restored from the back/forward cache
+addEventListener('online', () => recover(60000));
+async function recover(awayMs) {
+  if (!S.me) return;
+  setWake();
+  if (engine.ctx && engine.ctx.state === 'closed') return location.reload();   // the phone destroyed the sound engine: start over
+  engine.resume();                                                              // may need a tap on some phones: the banner covers that
+  // A connection that was open before an absence is usually dead now, even if it still says "open".
+  if (awayMs > 3000 || !ws || ws.readyState !== 1) connect();
+  // The phone may have stopped the microphone while the app was away.
+  if (voice && voice.track && voice.track.readyState !== 'live') await closeMic();
+  if (S.rooms.some((r) => r.talk)) ensureMic();
+  audioBanner();
+}
 
 function onMsg(m) {
   switch (m.t) {
@@ -451,6 +468,7 @@ async function settings() {
     h('h2', {}, 'Diagnostics'), diag,
     h('h2', {}, 'Account'),
     h('button', { onclick: changePassword }, 'Change password'),
+    h('button', { style: 'margin-left:8px', onclick: () => location.reload() }, 'Reload app'),
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);
 }
@@ -506,5 +524,5 @@ function pocketLock() {
   document.body.append(o);
 }
 
-window.netspeak = { engine, S, prefs };
+window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms) };
 boot();
