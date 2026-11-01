@@ -40,7 +40,7 @@ function simulate(devices, seconds = 600) {
       // (ctx, perf) pair at the moment of arrival: ctx = seconds on the audio clock, perf = ms
       const ctxAt = (W) => (W - d.T0) / 1000 * (1 + d.ppm * 1e-6), perfAt = (W) => W - d.P;
       const ctxRef = ctxAt(arrive), perfRef = perfAt(arrive);
-      const desired = ctxRef + ((emit + D) - d.est - perfRef) / 1000;
+      const desired = ctxRef + ((emit + D) - d.est - perfRef) / 1000 + ((d.noise || 0) * (rnd() - 0.5)) / 1000;   // coarse output-clock readings on phones
       const r = d.pl.plan(desired, ctxRef, N);
       if (r.drop) { d.times.push(null); continue; }
       if (r.slip) d.slips++;
@@ -64,7 +64,7 @@ console.log(`   worst moment-to-moment disagreement between devices: ${worst.toF
 assert(devs.every((d) => d.pl.stats.drops === 0), 'nothing may be late when the delay exceeds every path');
 assert(worst <= eSpread + 1.0, 'devices may only disagree by their clock-measurement error');
 
-// A device with a 400 ms stall drops that audio; everyone else stays aligned.
+// A device with 400 ms network stalls plays that audio late instead of skipping it; everyone else stays aligned.
 const devs2 = simulate([
   { net: 30, jit: 25, P: 1, T0: 100, ppm: 50 },
   { net: 60, jit: 20, P: 2, T0: 7, ppm: -60, stall: true },
@@ -72,13 +72,27 @@ const devs2 = simulate([
 ], 300);
 const ok = [devs2[0], devs2[2]];
 const w2 = spread(ok), e2 = Math.max(...ok.map((d) => d.e)) - Math.min(...ok.map((d) => d.e));
-console.log(`3. one device suffers 400 ms stalls: it skips ${devs2[1].pl.stats.drops} chunks; the other two still disagree by only ${w2.toFixed(2)} ms`);
-assert(w2 <= e2 + 1.0 && devs2[1].pl.stats.drops > 0 && ok.every((d) => d.pl.stats.drops === 0));
+console.log(`3. one device suffers 400 ms stalls: it skips ${devs2[1].pl.stats.drops} chunks (late audio is played, not skipped); the other two still disagree by only ${w2.toFixed(2)} ms`);
+assert(w2 <= e2 + 1.0 && devs2[1].pl.stats.drops === 0 && ok.every((d) => d.pl.stats.drops === 0));
+
+// A phone reports its output clock coarsely (+/- 8 ms of noise per reading): playback must stay smooth, not jump or warble.
+const devs3 = simulate([{ net: 60, jit: 30, P: 11, T0: 50, ppm: 40, noise: 16 }, { net: 90, jit: 30, P: 22, T0: 80, ppm: -40, noise: 16 }], 600);
+const stats3 = devs3.map((d) => d.pl.stats), chunks3 = devs3[0].times.length;
+console.log(`4. noisy clock readings (+/-8 ms), 10 min: jumps ${stats3.map((s) => s.reanchors)}, skipped ${stats3.map((s) => s.drops)}, chunks nudged ${devs3.map((d) => (100 * d.slips / chunks3).toFixed(1) + '%')}`);
+assert(stats3.every((s) => s.reanchors === 0 && s.drops === 0), 'noise must not cause jumps or skips');
+assert(devs3.every((d) => d.slips / chunks3 < 0.2), 'noise must not make the player warble constantly');
+
+// A network slower than the fixed delay (330 ms path, 250 ms delay): audio keeps playing, just not in lockstep with the others.
+const devs4 = simulate([{ net: 330, jit: 40, P: 5, T0: 1, ppm: 0 }], 120);
+const gapsMs = (() => { const t = devs4[0].times.filter((x) => x !== null); let g = 0; for (let i = 1; i < t.length; i++) { const gap = t[i] - t[i - 1] - 20; if (gap > 2) g += gap; } return g; })();
+console.log(`5. network slower than the delay (330 ms vs 250 ms): skipped ${devs4[0].pl.stats.drops} chunks, total silence ${gapsMs.toFixed(0)} ms over 2 min, extra local cushion ${(devs4[0].pl.extra * 1000).toFixed(0)} ms`);
+assert(devs4[0].pl.stats.drops === 0, 'slow networks must degrade to late playback, not skipping');
+assert(gapsMs < 6000, 'and the audio must stay smooth (under 5% silence)');
 
 // ---- 3. interpolation quality ---------------------------------------------------------------------------
 const err = (f, m) => { const x = Float32Array.from({ length: N }, (_, i) => Math.sin(2 * Math.PI * f * i / SR)); const y = stretch(x, m); let e = 0, s = (N - 1) / (m - 1);
   for (let j = 4; j < m - 4; j++) e = Math.max(e, Math.abs(y[j] - Math.sin(2 * Math.PI * f * j * s / SR))); return e; };
 const e1 = err(1000, N - 1), e10 = err(10000, N + 8);
-console.log(`4. sample correction accuracy (max error vs ideal): 1 kHz ${e1.toExponential(1)}, 10 kHz ${e10.toExponential(1)}`);
+console.log(`6. sample correction accuracy (max error vs ideal): 1 kHz ${e1.toExponential(1)}, 10 kHz ${e10.toExponential(1)}`);
 assert(e1 < 1e-3 && e10 < 0.02);
 console.log('OK');

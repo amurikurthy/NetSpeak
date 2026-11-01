@@ -159,11 +159,10 @@ export class Engine {
     const h = v.health || (v.health = { n: 0, bad: 0 });
     h.n++; if (bad) h.bad++;
     if (h.n < 50) return;
-    const unhealthy = h.bad > 30; h.n = 0; h.bad = 0;
+    const unhealthy = h.bad >= 45; h.n = 0; h.bad = 0;   // nearly every chunk failing: the clock mapping is broken
     if (!unhealthy) return;
     this.stats.syncFallbacks = (this.stats.syncFallbacks || 0) + 1;
-    this.syncFallbackUntil = performance.now() + 3000;
-    this.clock.reset();
+    this.syncFallbackUntil = performance.now() + 3000;   // (the clock is not thrown away: fresh measurements replace it if it really jumped)
     for (const o of this.voices.values()) if (o.sp) o.sp.next = null;
     if (this.onClockTrouble) this.onClockTrouble();
   }
@@ -208,7 +207,7 @@ export class Engine {
       if (v.legacy) { v.legacy = false; v.sp.next = null; }
       const r = v.sp.plan(this.serverToCtx(stampUs / 1000 + this.feedDelayMs), now, n);
       this.stats.syncCorr = (this.stats.syncCorr || 0) + (r.slip ? 1 : 0);
-      this.syncHealth(v, r.drop || r.slip !== 0 || r.when - now > 1.0);
+      this.syncHealth(v, r.drop || r.when - now > 1.0);   // only a chunk that cannot be played at all counts, not routine corrections
       if (r.drop) { this.stats.syncDrops++; return; }   // too late to play in sync: skip it
       when = r.when; slip = r.slip;
     } else {

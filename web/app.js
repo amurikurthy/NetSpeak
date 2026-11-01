@@ -136,7 +136,7 @@ function connect() {
 // feed at the same instant as every other listener.
 engine.onClockTrouble = () => { if (S.connected) startClockSync(); };
 function startClockSync() {
-  clearInterval(syncTimer); engine.clock.reset();
+  clearInterval(syncTimer);   // (existing measurements are kept: they stay valid, and a real clock jump is detected from fresh ones)
   const ping = () => send({ t: 'sync', c: performance.now() });
   let n = 0; ping();
   syncTimer = setInterval(() => { ping(); if (++n === 8) { clearInterval(syncTimer); syncTimer = setInterval(ping, 5000); } }, 150);
