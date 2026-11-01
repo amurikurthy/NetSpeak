@@ -42,7 +42,6 @@ export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.str
 const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, joined: new Set(), talking: new Set(),
   listening: new Set(), calls: new Set(), active: null, publishing: null, connected: false, c: 0 };
 const engine = new Engine();
-let syncTimer = null;
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, voice = null, micPromise = null, micError = '', wakeLock = null;
 let lastFbToast = 0;
 const root = $('#app');
@@ -111,7 +110,7 @@ function connect() {
   if (ws) { ws.onclose = null; try { ws.close(); } catch {} S.talking.clear(); stopSending(); }   // the server drops talk state with the old connection
   const w = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   w.binaryType = 'arraybuffer';
-  w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); startClockSync(); };
+  w.onopen = () => { backoff = 500; lastRx = Date.now(); setConn(true); };
   w.onmessage = (e) => {
     lastRx = Date.now();
     if (typeof e.data !== 'string') return engine.receive(e.data);
@@ -131,15 +130,6 @@ function connect() {
     if (Date.now() - lastRx > 45000) return ws.close();
     send({ t: 'ping' });
   }, 15000);
-}
-// Measure this device's clock against the server's: a quick burst, then every 5 s. Used to play the program
-// feed at the same instant as every other listener.
-engine.onClockTrouble = () => { if (S.connected) startClockSync(); };
-function startClockSync() {
-  clearInterval(syncTimer);   // (existing measurements are kept: they stay valid, and a real clock jump is detected from fresh ones)
-  const ping = () => send({ t: 'sync', c: performance.now() });
-  let n = 0; ping();
-  syncTimer = setInterval(() => { ping(); if (++n === 8) { clearInterval(syncTimer); syncTimer = setInterval(ping, 5000); } }, 150);
 }
 const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
 function setConn(on) { S.connected = on; ui.dot?.classList.toggle('on', on); }
@@ -165,7 +155,6 @@ async function recover(awayMs) {
   // The phone may have stopped the microphone while the app was away.
   if (voice && voice.track && voice.track.readyState !== 'live') await closeMic();
   if (S.rooms.some((r) => r.talk)) ensureMic();
-  if (ws && ws.readyState === 1) startClockSync();   // the device clock may have lost time while away: measure it again
   audioBanner();
 }
 
@@ -173,7 +162,6 @@ function onMsg(m) {
   switch (m.t) {
     case 'state': {
       const rooms = m.rooms || [], feeds = m.feeds || [];   // a user with no access gets empty lists, never null
-      if (m.feedDelayMs) engine.feedDelayMs = m.feedDelayMs;
       S.rooms = rooms; S.feeds = feeds; S.c = m.you.c; S.me = { ...S.me, displayName: m.you.name, role: m.you.role };
       if (ui.who) ui.who.textContent = m.you.name;   // an admin may rename this user while they are connected
       engine.registerChannels(rooms, feeds);
@@ -198,7 +186,6 @@ function onMsg(m) {
       if (S.joined.size || S.listening.size) enableAudio();   // starts at once where the browser allows it
       break;
     }
-    case 'sync': engine.clock.add(m.c, m.s, performance.now()); break;
     case 'presence': S.presence = m; update(); break;
     case 'publish': if (!m.on && S.publishing === m.feed) stopPublish(true); break;
     case 'error': toast(m.msg); break;
@@ -223,6 +210,7 @@ function audioNeeded() {
   return (S.joined.size > 0 || S.listening.size > 0) && (!engine.ctx || engine.ctx.state !== 'running' || engine.el?.paused);
 }
 engine.onState = () => audioBanner();
+engine.onAecOff = () => toast('This device is too busy for echo cancellation, so it was switched off to keep the sound smooth. Earbuds avoid echo.', 8000);
 function audioBanner() { if (ui.audio) ui.audio.hidden = !audioNeeded(); }
 async function enableAudio() {
   try {
@@ -465,9 +453,8 @@ async function settings() {
       `microphone:   ${v ? (v.track?.readyState + ' / ' + (v.track?.label || '?') + (v.track?.muted ? ' (MUTED by OS)' : '')) : 'closed'}`,
       `joined rooms: ${S.rooms.filter((r) => S.joined.has(r.id)).map((r) => r.name + (r.talk ? '' : ' (listen only)')).join(', ') || 'none'}`,
       `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
-      `echo cancel:  ${S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
+      `echo cancel:  ${engine.aecOff ? 'OFF: this device was too busy' : S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
       `feedback:     ${S.fb ? `${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : 'none detected'}`,
-      `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
     ].join('\n');
   };

@@ -1,5 +1,3 @@
-import { ClockSync, SyncPlayout, stretch } from './syncplay.js';
-
 // Audio engine: Opus over the app WebSocket, Web Audio mixing, mic capture.
 // One second of exact digital silence as a WAV blob, so the browser sees real media playing. (It must be true
 // silence: even faint noise in a looping clip can be heard as a hiss on some phones.)
@@ -22,17 +20,15 @@ export class Engine {
     this.chans = new Map();    // ch -> {kind:'room'|'feed', id}
     this.gains = new Map();    // "room:id"/"feed:id" -> GainNode
     this.vol = { master: 1, mic: 1 };
-    this.jitter = { room: 0.08, feed: 0.05 };   // fixed playout buffers (seconds)
+    this.jitter = { room: 0.08, feed: 0.15 };   // fixed playout buffers (seconds)
     this.onLevel = () => {};
     this.sendFrame = () => {};
     this.captures = new Map(); // name -> Capture
     this.sinkId = '';
-    this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0, syncDrops: 0, syncCorr: 0 };
-    this.syncFallbackUntil = 0;     // while now < this, the feed plays unsynchronised (the clock mapping looked broken)
-    this.onClockTrouble = null;     // asked to re-measure the clock
+    this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0, drops: 0 };
+    this.aecOff = false;            // set when the audio thread cannot keep up: the echo canceller is switched off
+    this.onAecOff = null;
     this.inactive = new Set();      // channels the user stopped: packets still in flight for them are ignored
-    this.clock = new ClockSync();   // this device's clock vs the server's
-    this.feedDelayMs = 250;         // set by the server: every device plays program audio this long after its stamp
   }
 
   // One-time setup. Safe to call any time, with or without a user gesture; concurrent calls share it.
@@ -47,6 +43,13 @@ export class Engine {
     // Whenever the engine is interrupted or comes back, throw away everything queued or half-decoded: it is stale, and
     // playing it over the live audio sounds distorted.
     ctx.onstatechange = () => { this.resetVoices(); this.onState && this.onState(); };
+    // If this device's audio thread cannot keep up (choppy sound), the echo canceller is the first thing to give up:
+    // some echo is far better than broken audio. (Chrome reports the audio load; other browsers just skip this.)
+    try {
+      this.overload = 0;
+      ctx.renderCapacity.addEventListener('update', (e) => this.checkLoad(e.underrunRatio));
+      ctx.renderCapacity.start({ updateInterval: 1 });
+    } catch {}
     this.master = ctx.createGain();
     this.comms = ctx.createGain();
     this.program = ctx.createGain();
@@ -111,40 +114,26 @@ export class Engine {
   // ---- receive ----
   receive(buf) {
     const dv = new DataView(buf);
-    const type = dv.byteLength > 0 ? dv.getUint8(0) : 0;
-    // 1 = room voice [1][chan u16][sender u16][seq u32][opus]; 2 = program feed, same plus a u64 server stamp (us)
-    const hdr = type === 2 ? 17 : 9;
-    if ((type !== 1 && type !== 2) || dv.byteLength <= hdr || !this.ctx) return;
+    // [1][chan u16][sender u16][seq u32][opus], for rooms and program feeds alike
+    if (dv.byteLength <= 9 || dv.getUint8(0) !== 1 || !this.ctx) return;
     if (this.ctx.state !== 'running') return;   // phone suspended the sound engine: audio cannot play, so do not queue it
     this.stats.rx++; this.stats.rxLast = performance.now();
     const ch = dv.getUint16(1), sender = dv.getUint16(3), seq = dv.getUint32(5);
     const ref = this.chans.get(ch);
     if (!ref || this.inactive.has(ref.kind + ':' + ref.id)) return;
     const key = ch + ':' + sender;
-    if (type === 2 && this.clock.ready && performance.now() >= this.syncFallbackUntil) {
-      // A backlog (the page was throttled and a burst arrives at once): packets already past their play time can only
-      // be skipped, so skip them before spending any effort decoding.
-      const lateMs = performance.now() + this.clock.offset - Number(dv.getBigUint64(9)) / 1000 - this.feedDelayMs;
-      if (lateMs > 60) { this.stats.syncDrops++; return; }
-    }
     let v = this.voices.get(key);
-    // A stream that resumes after a pause (Stop then Listen, a dropped connection) needs a fresh decoder. The old one
-    // keeps counting time from before the pause, so its timestamps come out in the past and every chunk looks too late.
-    // A missing packet number (the server skipped some while we were not listening, or the sender restarted) means the same
-    // thing. (Only the packet number is trusted: a throttled page delivers packets in bursts, which is not a pause.)
-    if (v && seq !== ((v.seq + 1) >>> 0)) { this.dropVoice(key, v); v = null; }
     if (!v) { v = this.makeVoice(ref); this.voices.set(key, v); }
-    v.last = performance.now(); v.seq = seq;
-    const timestamp = type === 2 ? Number(dv.getBigUint64(9)) : seq * 20000;   // feed: the stamp rides through the decoder
+    v.last = performance.now();
     try {
-      v.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp, data: new Uint8Array(buf, hdr) }));
+      v.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: seq * 20000, data: new Uint8Array(buf, 9) }));
     } catch (e) { /* decoder closed; recreated on next frame */ this.voices.delete(key); }
   }
 
   makeVoice(ref) {
     const ctx = this.ctx;
     const feed = ref.kind === 'feed';
-    const v = { next: 0, last: 0, ref, sp: feed ? new SyncPlayout(48000) : null, srcs: new Set() };
+    const v = { next: 0, last: 0, ref, srcs: new Set() };
     v.dec = new AudioDecoder({
       output: (data) => this.play(v, data, feed),
       error: () => { this.stats.decodeErr++; try { v.dec.close(); } catch {} v.dead = true; },
@@ -153,24 +142,19 @@ export class Engine {
     return v;
   }
 
-  // If most chunks are being skipped or nudged, the clock mapping is wrong (the device slept, the clock estimate went stale).
-  // Never go silent or warble because of it: play unsynchronised for a few seconds and re-measure the clock meanwhile.
-  syncHealth(v, bad) {
-    const h = v.health || (v.health = { n: 0, bad: 0 });
-    h.n++; if (bad) h.bad++;
-    if (h.n < 50) return;
-    const unhealthy = h.bad >= 45; h.n = 0; h.bad = 0;   // nearly every chunk failing: the clock mapping is broken
-    if (!unhealthy) return;
-    this.stats.syncFallbacks = (this.stats.syncFallbacks || 0) + 1;
-    this.syncFallbackUntil = performance.now() + 3000;   // (the clock is not thrown away: fresh measurements replace it if it really jumped)
-    for (const o of this.voices.values()) if (o.sp) o.sp.next = null;
-    if (this.onClockTrouble) this.onClockTrouble();
+  checkLoad(underrunRatio) {
+    this.overload = underrunRatio > 0.02 ? this.overload + 1 : Math.max(0, this.overload - 1);
+    if (this.overload >= 3 && !this.aecOff) {
+      this.aecOff = true;
+      for (const c of this.captures.values()) if (c.o.aec) c.node.port.postMessage({ aec: false });
+      if (this.onAecOff) this.onAecOff();
+    }
   }
 
   // Cancel everything this voice has queued and forget its timeline.
   flushVoice(v) {
     for (const s of v.srcs) { try { s.stop(); s.disconnect(); } catch {} }
-    v.srcs.clear(); v.next = 0; if (v.sp) v.sp.next = null;
+    v.srcs.clear(); v.next = 0;
   }
   dropVoice(key, v) { this.flushVoice(v); try { v.dec.close(); } catch {} this.voices.delete(key); }
   resetVoices() { for (const [k, v] of [...this.voices]) this.dropVoice(k, v); }
@@ -180,48 +164,25 @@ export class Engine {
   stopChannel(kind, id) { this.inactive.add(kind + ':' + id); this.dropChannel(kind, id); }
   startChannel(kind, id) { this.inactive.delete(kind + ':' + id); }
 
-  // Audio-clock time at which the server-clock instant sMs should sound on this device.
-  serverToCtx(sMs) {
-    const ot = this.ctx.getOutputTimestamp ? this.ctx.getOutputTimestamp() : null;
-    const ok = ot && ot.performanceTime > 0 && ot.contextTime > 0;
-    const ctxRef = ok ? ot.contextTime : this.ctx.currentTime, perfRef = ok ? ot.performanceTime : performance.now();
-    return ctxRef + (sMs - this.clock.offset - perfRef) / 1000;
-  }
-
+  // Each decoded 20 ms chunk is queued right behind the previous one on the audio clock, with a small fixed cushion
+  // (this.jitter) against network jitter.
   play(v, data, feed) {
     const ctx = this.ctx;
     if (ctx.state !== 'running' || v.dead) { data.close(); return; }
     const ch = data.numberOfChannels, n = data.numberOfFrames;
-    const planes = [];
+    const ab = ctx.createBuffer(ch, n, 48000);
     for (let c = 0; c < ch; c++) {
       const tmp = new Float32Array(n);
       data.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
-      planes.push(tmp);
+      ab.copyToChannel(tmp, c);
     }
-    const stampUs = data.timestamp;
     data.close();
     const now = ctx.currentTime;
-    let when, slip = 0;
-    if (feed && this.clock.ready && v.sp && performance.now() >= this.syncFallbackUntil) {
-      // Synchronised: sound this chunk exactly feedDelayMs after its server stamp, like every other listener.
-      if (v.legacy) { v.legacy = false; v.sp.next = null; }
-      const r = v.sp.plan(this.serverToCtx(stampUs / 1000 + this.feedDelayMs), now, n);
-      this.stats.syncCorr = (this.stats.syncCorr || 0) + (r.slip ? 1 : 0);
-      this.syncHealth(v, r.drop || r.when - now > 1.0);   // only a chunk that cannot be played at all counts, not routine corrections
-      if (r.drop) { this.stats.syncDrops++; return; }   // too late to play in sync: skip it
-      when = r.when; slip = r.slip;
-    } else {
-      // Not synchronised yet (first moments after connecting) or a room voice: simple low-delay queue.
-      if (feed) v.legacy = true;
-      const target = this.jitter[feed ? 'feed' : 'room'];
-      if (v.next < now + 0.01 || v.next > now + target * 4 + 0.3) v.next = now + target;   // resync when we underrun or drift far ahead
-      when = v.next; v.next += n / 48000;
-    }
-    // Safety nets: never schedule far ahead (a broken clock mapping), and never let a queue grow without bound.
-    if (when - now > 1.0 || v.srcs.size > 150) { this.stats.syncDrops++; this.flushVoice(v); return; }
-    const m = n + slip;
-    const ab = ctx.createBuffer(ch, m, 48000);
-    for (let c = 0; c < ch; c++) ab.copyToChannel(slip ? stretch(planes[c], m) : planes[c], c);
+    const target = this.jitter[feed ? 'feed' : 'room'];
+    if (v.next < now + 0.01 || v.next > now + target * 4 + 0.3) v.next = now + target;   // resync when we underrun or drift far ahead
+    const when = v.next; v.next += n / 48000;
+    // Safety net: never let a queue grow without bound.
+    if (v.srcs.size > 150) { this.stats.drops++; this.flushVoice(v); return; }
     const src = ctx.createBufferSource();
     src.buffer = ab;
     src.connect(this.gainFor(v.ref.kind, v.ref.id));
@@ -295,12 +256,12 @@ class Capture {
     }
     this.node = new AudioWorkletNode(ctx, 'ns-framer', {
       numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [o.channels],
-      processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb, feedback: o.feedback, aec: o.aec },
+      processorOptions: { channels: o.channels, gate: o.gate, threshold: o.gateDb, feedback: o.feedback, aec: o.aec && !e.aecOff },
     });
     tail.connect(this.node);
     // Echo cancellation: what this device is playing is the reference (input 1), so the mic can be cleaned of it
     // in software, without the phone's own echo cancellation (which switches Android into call mode).
-    if (o.aec) e.master.connect(this.node, 0, 1);
+    if (o.aec && !e.aecOff) e.master.connect(this.node, 0, 1);
     this.sink = ctx.createGain(); this.sink.gain.value = 0;   // keeps the graph pulled, outputs silence
     this.node.connect(this.sink); this.sink.connect(ctx.destination);
     this.enc = new AudioEncoder({

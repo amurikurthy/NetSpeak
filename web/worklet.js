@@ -98,23 +98,23 @@ class CFFT {
 
 class Aec {
   constructor() {
-    this.B = 128; this.N = 256; this.K = 129; this.P = 32; this.CPB = 16;   // CPB: filter blocks length-constrained per call
+    this.B = 128; this.N = 256; this.K = 129; this.P = 32; this.CPB = 4;   // CPB: filter blocks length-constrained per call (the costly part: 2 FFTs each)
     const { N, K, P } = this;
     this.fft = new CFFT(N);
     this.xbuf = new Float64Array(N);
     this.re = new Float64Array(N); this.im = new Float64Array(N);
     this.Xr = new Float32Array(P * K); this.Xi = new Float32Array(P * K);   // reference spectra, newest at `hp`
     this.Wr = new Float32Array(P * K); this.Wi = new Float32Array(P * K);   // filter: one spectrum per block of delay
-    this.S = new Float64Array(K); this.Er = new Float64Array(K); this.Ei = new Float64Array(K);
+    this.Er = new Float64Array(K); this.Ei = new Float64Array(K);
     this.wE = new Float64Array(P);
     this.dbuf = new Float64Array(N);                                        // mic window, for the echo-presence detector
     this.Cr = new Float32Array(P * K); this.Ci = new Float32Array(P * K);  // slow average of conj(X_p) * D, per delay block and frequency
     this.PX = new Float32Array(P * K); this.PD = new Float64Array(K);       // slow averages of |X_p|^2 and |D|^2
     this.coh = 0;                                                           // 0 = mic unrelated to playback, 1 = mic is playback
-    this.hp = 0; this.cblk = 0;
+    this.hp = 0; this.cblk = 0; this.nb = 0;
     this.conv = 0; this.dtHold = 0; this.dtCount = 0; this.bad = 0;
     this.erle = 0;                                                          // smoothed echo reduction in dB (diagnostics)
-    this.muHi = 1.2; this.muLo = 0.8; this.muDt = 0.002; this.freeze = 0; this.silent = 0; this.alpha = 0; this.leakK = 0; this.cohT = 0.3; this.cohBeta = 0.02; this.prop = 0.6; this.floorRel = 0.02; // tuning: step before/after convergence, proportionate share, power floor
+    this.muHi = 1.2; this.muLo = 0.8; this.muDt = 0.002; this.freeze = 0; this.silent = 0; this.alpha = 0; this.leakK = 0; this.cohT = 0.38; this.cohBeta = 0.02; this.prop = 0.6; this.floorRel = 0.02; // tuning: step before/after convergence, proportionate share, power floor
   }
 
   // d: mic block, x: reference block (B samples each, 16 kHz). Writes the echo estimate to yhat.
@@ -133,27 +133,27 @@ class Aec {
     this.hp = (this.hp + 1) % P;
     const base = this.hp * K;
     for (let k = 0; k < K; k++) { this.Xr[base + k] = re[k]; this.Xi[base + k] = im[k]; }
-    this.S.fill(0);
-    for (let p = 0; p < P; p++) { const o = p * K; for (let k = 0; k < K; k++) this.S[k] += this.Xr[o + k] * this.Xr[o + k] + this.Xi[o + k] * this.Xi[o + k]; }
+    this.nb = (this.nb + 1) | 0;
     // Echo-presence detector: averaged over about half a second, the mic is only coherent with the playback (at some
     // delay) if the playback really reaches the mic. Unrelated speech averages out to a low value.
     this.dbuf.copyWithin(0, B); for (let i = 0; i < B; i++) this.dbuf[B + i] = d[i];
-    for (let i = 0; i < N; i++) { re[i] = this.dbuf[i]; im[i] = 0; }
-    this.fft.run(re, im, false);
-    const bt = this.cohBeta; let cohMax = 0;
-    for (let k = 0; k < K; k++) this.PD[k] += bt * (re[k] * re[k] + im[k] * im[k] - this.PD[k]);
-    let dSum = 0; for (let k = 0; k < K; k++) dSum += Math.sqrt(this.PD[k]);
-    for (let p = 0; p < P; p++) {
-      const xo = ((this.hp - p + P) % P) * K; let num = 0, den = 0;
-      for (let k = 0; k < K; k++) {
-        const xr = this.Xr[xo + k], xi = this.Xi[xo + k], o = p * K + k;   // averages are indexed by delay (p), not by ring slot
-        this.Cr[o] += bt * (xr * re[k] + xi * im[k] - this.Cr[o]); this.Ci[o] += bt * (xr * im[k] - xi * re[k] - this.Ci[o]);
-        this.PX[o] += bt * (xr * xr + xi * xi - this.PX[o]);
-        num += Math.sqrt(this.Cr[o] * this.Cr[o] + this.Ci[o] * this.Ci[o]); den += Math.sqrt(this.PX[o] * this.PD[k]);
+    if ((this.nb & 3) === 0) {   // the averages are slow, so every fourth block is plenty (and a quarter of the cost)
+      for (let i = 0; i < N; i++) { re[i] = this.dbuf[i]; im[i] = 0; }
+      this.fft.run(re, im, false);
+      const bt = this.cohBeta * 4; let cohMax = 0;
+      for (let k = 0; k < K; k++) this.PD[k] += bt * (re[k] * re[k] + im[k] * im[k] - this.PD[k]);
+      for (let p = 0; p < P; p++) {
+        const xo = ((this.hp - p + P) % P) * K; let num = 0, den = 0;
+        for (let k = 0; k < K; k++) {
+          const xr = this.Xr[xo + k], xi = this.Xi[xo + k], o = p * K + k;   // averages are indexed by delay (p), not by ring slot
+          this.Cr[o] += bt * (xr * re[k] + xi * im[k] - this.Cr[o]); this.Ci[o] += bt * (xr * im[k] - xi * re[k] - this.Ci[o]);
+          this.PX[o] += bt * (xr * xr + xi * xi - this.PX[o]);
+          num += Math.sqrt(this.Cr[o] * this.Cr[o] + this.Ci[o] * this.Ci[o]); den += Math.sqrt(this.PX[o] * this.PD[k]);
+        }
+        const c = num / (den + 1e-20); if (c > cohMax) cohMax = c;
       }
-      const c = num / (den + 1e-20); if (c > cohMax) cohMax = c;
+      this.coh = cohMax;
     }
-    this.coh = cohMax;
     // echo estimate: sum over blocks of W_p * X_(now - p)
     const Yr = this.Er, Yi = this.Ei; Yr.fill(0); Yi.fill(0);
     for (let p = 0; p < P; p++) {
@@ -198,10 +198,12 @@ class Aec {
 
     // Proportionate step: blocks that already hold a lot of the echo path learn faster than empty ones. The power
     // used to normalise is weighted the same way, so the combined step is always mu: stable from the first block.
-    let wSum = 0;
-    for (let p = 0; p < P; p++) { let e = 0; const o = p * K; for (let k = 0; k < K; k++) e += this.Wr[o + k] * this.Wr[o + k] + this.Wi[o + k] * this.Wi[o + k]; this.wE[p] = e; wSum += e; }
-    const gains = this.gains || (this.gains = new Float64Array(P)), Sg = this.Sg || (this.Sg = new Float64Array(K));
-    for (let p = 0; p < P; p++) gains[p] = P * ((1 - this.prop) / P + this.prop * (wSum > 1e-9 ? this.wE[p] / wSum : 1 / P));
+    const gains = this.gains || (this.gains = new Float64Array(P).fill(1)), Sg = this.Sg || (this.Sg = new Float64Array(K));
+    if ((this.nb & 3) === 2) {   // which blocks hold the echo changes slowly: refresh the weights every fourth block
+      let wSum = 0;
+      for (let p = 0; p < P; p++) { let e = 0; const o = p * K; for (let k = 0; k < K; k++) e += this.Wr[o + k] * this.Wr[o + k] + this.Wi[o + k] * this.Wi[o + k]; this.wE[p] = e; wSum += e; }
+      for (let p = 0; p < P; p++) gains[p] = P * ((1 - this.prop) / P + this.prop * (wSum > 1e-9 ? this.wE[p] / wSum : 1 / P));
+    }
     Sg.fill(0);
     for (let p = 0; p < P; p++) { const xo = ((this.hp - p + P) % P) * K, gp = gains[p]; for (let k = 0; k < K; k++) Sg[k] += gp * (this.Xr[xo + k] * this.Xr[xo + k] + this.Xi[xo + k] * this.Xi[xo + k]); }
     let sMean = 0; for (let k = 0; k < K; k++) sMean += Sg[k]; sMean /= K;
@@ -308,7 +310,9 @@ class Framer extends AudioWorkletProcessor {
       this.aIn = new Float64Array(384); this.aRef = new Float64Array(384); this.aOut = new Float64Array(384);
       this.aPos = 0; this.aRead = 0;
     }
+    this.aecOff = false;   // switched off from outside when this device cannot keep up
     this.port.onmessage = (e) => {
+      if ('aec' in e.data && this.aec) this.aecOff = !e.data.aec;
       if ('gate' in e.data) { this.gate = !!e.data.gate; if (!this.gate) this.g = 1; }
       if ('threshold' in e.data) this.thr = Math.pow(10, e.data.threshold / 20);
       if ('feedback' in e.data) this.fb = !!e.data.feedback && this.ch === 1;
@@ -375,7 +379,7 @@ class Framer extends AudioWorkletProcessor {
       const xs = [];
       for (let c = 0; c < this.ch; c++) {
         let v = inp[Math.min(c, inp.length - 1)][i];
-        if (this.aec) {
+        if (this.aec && !this.aecOff) {
           // Echo cancellation works in 384-sample blocks, so the mic is delayed by about 9 ms.
           const ref = inputs[1] && inputs[1].length ? (inputs[1].length > 1 ? 0.5 * (inputs[1][0][i] + inputs[1][1][i]) : inputs[1][0][i]) : 0;
           const o = this.aOut[this.aRead++];
@@ -404,7 +408,7 @@ class Framer extends AudioWorkletProcessor {
         this.pos = 0;
         this.frameNo++;
         if (this.fb) this.analyze();
-        if (this.aec && this.frameNo % 25 === 0) this.port.postMessage({ aec: Math.round(this.aec.aec.erle) });
+        if (this.aec && !this.aecOff && this.frameNo % 25 === 0) this.port.postMessage({ aec: Math.round(this.aec.aec.erle) });
         let sum = 0;
         const b0 = this.bufs[0];
         for (let k = 0; k < this.N; k++) sum += b0[k] * b0[k];

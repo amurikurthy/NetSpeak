@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -63,10 +62,6 @@ func main() {
 
 	auth := NewAuth(st, env("NETSPEAK_TRUST_PROXY", "1") == "1")
 	hub := NewHub(st, auth)
-	hub.feedDelayMs = 250
-	if v, err := strconv.Atoi(env("NETSPEAK_FEED_DELAY_MS", "250")); err == nil && v >= 50 && v <= 2000 {
-		hub.feedDelayMs = v
-	}
 	api := &API{st: st, auth: auth, hub: hub}
 
 	mux := http.NewServeMux()
