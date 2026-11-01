@@ -2,6 +2,7 @@
 // Run: node test/syncplay.test.mjs
 import assert from 'node:assert';
 import { ClockSync, SyncPlayout, stretch } from '../web/syncplay.js';
+import { execFileSync } from 'node:child_process';
 
 let seed = 11; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 const SR = 48000, N = 960;
@@ -64,7 +65,7 @@ console.log(`   worst moment-to-moment disagreement between devices: ${worst.toF
 assert(devs.every((d) => d.pl.stats.drops === 0), 'nothing may be late when the delay exceeds every path');
 assert(worst <= eSpread + 2.0, 'devices may only disagree by their clock-measurement error');
 
-// A device with 400 ms network stalls plays that audio late instead of skipping it; everyone else stays aligned.
+// A device with 400 ms network stalls skips what it missed and resumes in step; everyone else stays aligned.
 const devs2 = simulate([
   { net: 10, jit: 10, P: 1, T0: 100, ppm: 50 },
   { net: 30, jit: 15, P: 2, T0: 7, ppm: -60, stall: true },
@@ -72,8 +73,9 @@ const devs2 = simulate([
 ], 300);
 const ok = [devs2[0], devs2[2]];
 const w2 = spread(ok), e2 = Math.max(...ok.map((d) => d.e)) - Math.min(...ok.map((d) => d.e));
-console.log(`3. one device suffers 400 ms stalls: it skips ${devs2[1].pl.stats.drops} chunks (late audio is played, not skipped); the other two still disagree by only ${w2.toFixed(2)} ms`);
+console.log(`3. one device suffers 400 ms stalls: it skips ${devs2[1].pl.stats.skipped} late chunks and resumes in step (extra delay ${(devs2[1].pl.extra * 1000).toFixed(0)} ms); the other two still disagree by only ${w2.toFixed(2)} ms`);
 assert(w2 <= e2 + 1.0 && devs2[1].pl.stats.drops === 0 && ok.every((d) => d.pl.stats.drops === 0));
+assert(devs2[1].pl.extra === 0, 'a blip must not leave extra delay behind');
 
 // A phone reports its output clock coarsely (+/- 8 ms of noise per reading): playback must stay smooth, not jump or warble.
 const devs3 = simulate([{ net: 30, jit: 10, P: 11, T0: 50, ppm: 40, noise: 16 }, { net: 50, jit: 10, P: 22, T0: 80, ppm: -40, noise: 16 }], 600);
@@ -85,7 +87,7 @@ assert(devs3.every((d) => d.slips / chunks3 < 0.2), 'noise must not make the pla
 // A network slower than the fixed delay (500 ms path, 350 ms delay): audio keeps playing, just not in lockstep with the others.
 const devs4 = simulate([{ net: 500, jit: 40, P: 5, T0: 1, ppm: 0 }], 120);
 const gapsMs = (() => { const t = devs4[0].times.filter((x) => x !== null); let g = 0; for (let i = 1; i < t.length; i++) { const gap = t[i] - t[i - 1] - 20; if (gap > 2) g += gap; } return g; })();
-console.log(`5. network slower than the delay (500 ms vs 350 ms): skipped ${devs4[0].pl.stats.drops} chunks, total silence ${gapsMs.toFixed(0)} ms over 2 min, extra local cushion ${(devs4[0].pl.extra * 1000).toFixed(0)} ms`);
+console.log(`5. network slower than the delay (500 ms vs 350 ms): skipped ${devs4[0].pl.stats.drops} chunks, total silence ${gapsMs.toFixed(0)} ms over 2 min, extra local cushion ${(devs4[0].pl.extra * 1000).toFixed(0)} ms, ${devs4[0].pl.stats.skipped} chunks skipped before it settled`);
 assert(devs4[0].pl.stats.drops === 0, 'slow networks must degrade to late playback, not skipping');
 assert(gapsMs < 6000, 'and the audio must stay smooth (under 5% silence)');
 
@@ -102,24 +104,84 @@ assert(lagAfterStalls > 0, 'the scenario must actually make it fall behind');
 assert(devs5[1].pl.extra < 0.002, 'extra delay must be handed back after things are quiet');
 assert(tail(devs5) <= e5 + 2.0, 'and it must be back in step with the other device');
 
-// How long after a blip does a device get back in step? One 460 ms network stall (its audio arrives in a burst), then clean.
+// What happens after a blip? One 460 ms network stall (its audio arrives in a burst), then clean. The device must skip what
+// it missed and carry on exactly in step: no extra delay, no speeding up to make up for it.
 {
-  const pl = new SyncPlayout(SR), dt = N / SR; let blipEnd = null, recovered = null, maxSpeedup = 0, dry = 0;
+  const pl = new SyncPlayout(SR), dt = N / SR; let maxSpeedup = 0, worstAfter = 0, firstOnTime = null;
   for (let i = 0; i < 1500; i++) {
-    const due = 5 + i * dt + D / 1000;                          // when this chunk should sound (audio clock, seconds)
-    const sent = 5 + i * dt;
+    const due = 5 + i * dt + D / 1000, sent = 5 + i * dt;
     const stalled = i >= 500 && i < 523;                        // chunks 500..522 are held up, then arrive together
     const arrive = stalled ? 5 + 500 * dt + 0.46 : sent + 0.02;
     const r = pl.plan(due, arrive, N);
     if (r.slip < 0) maxSpeedup = Math.max(maxSpeedup, -r.slip / N);
-    if (i === 523) blipEnd = arrive;
-    if (blipEnd !== null && recovered === null && pl.extra < 0.001) recovered = arrive - blipEnd;
+    if (!r.drop && i >= 500) { if (firstOnTime === null) firstOnTime = i; worstAfter = Math.max(worstAfter, Math.abs(r.when - due)); }
   }
-  dry = pl.stats.dry;
-  console.log(`8. recovery from a 460 ms blip: ran dry ${dry}x, extra delay gone ${recovered === null ? 'never' : recovered.toFixed(1) + ' s'} after the blip, fastest playback +${(maxSpeedup * 100).toFixed(1)}%`);
-  assert(dry > 0, 'the blip must actually run the buffer dry');
-  assert(recovered !== null && recovered < 3.5, 'recovery must take about two to three seconds');
-  assert(maxSpeedup < 0.055, 'catching up may not sound like a speeded-up tape');
+  console.log(`8. blip of 460 ms: ran dry ${pl.stats.dry}x, skipped ${pl.stats.skipped} late chunks, then played exactly on time (worst error ${(worstAfter * 1000).toFixed(1)} ms), extra delay ${(pl.extra * 1000).toFixed(0)} ms, fastest playback +${(maxSpeedup * 100).toFixed(1)}%`);
+  assert(pl.stats.dry > 0 && pl.stats.skipped > 0, 'the blip must actually run the buffer dry');
+  assert(pl.extra === 0, 'no extra delay may be left behind');
+  assert(worstAfter < 0.005, 'after the skip it must be exactly in step again');
+  assert(maxSpeedup < 0.015, 'and it must not speed up to catch up');
+}
+
+// ---- pitch lock while catching up ---------------------------------------------------------------------------
+// A device 300 ms behind catches up over several seconds. Feed it real audio and measure the pitch of what it plays.
+function catchUp(sig, usePlanes) {
+  const pl = new SyncPlayout(SR); pl.extra = 0.3;
+  const out = []; let removed = 0, maxStep = 0;
+  for (let i = 0; i + N <= sig.length; i++) {
+    const chunk = sig.subarray(i * N, (i + 1) * N);
+    if (chunk.length < N) break;
+    const planes = [Float32Array.from(chunk), Float32Array.from(chunk)];
+    const due = 5 + i * (N / SR) + 0.35, now = 5 + i * (N / SR) + 0.02;
+    const r = pl.plan(due, now, N, usePlanes ? planes : undefined);
+    let base = r.planes || planes;
+    if (r.slip) base = base.map((p) => stretch(p, p.length + r.slip));
+    removed += N - base[0].length; out.push(base[0]);
+  }
+  const y = new Float32Array(out.reduce((a, c) => a + c.length, 0)); let o = 0; for (const c of out) { y.set(c, o); o += c.length; }
+  for (let i = 2; i < y.length; i++) maxStep = Math.max(maxStep, Math.abs(y[i] - 2 * y[i - 1] + y[i - 2]));
+  return { y, removed, stats: pl.stats, maxStep, extraLeft: pl.extra };
+}
+// median pitch of the voiced frames (autocorrelation), 80-400 Hz
+function medianPitch(y) {
+  const W = 2048, f = [];
+  for (let s = 0; s + W <= y.length; s += 1024) {
+    let e0 = 0; for (let i = 0; i < W; i++) e0 += y[s + i] * y[s + i];
+    if (e0 < 1e-3) continue;
+    let best = 0, bl = 0; const ac = [];
+    for (let l = Math.floor(SR / 400); l <= Math.floor(SR / 80); l++) { let a = 0, b = 0; for (let i = 0; i + l < W; i++) { a += y[s + i] * y[s + i + l]; b += y[s + i + l] * y[s + i + l]; } const v = a / Math.sqrt(e0 * b + 1e-12); ac[l] = v; if (v > best) { best = v; bl = l; } }
+    if (best < 0.6) continue;
+    const a0 = ac[bl - 1] ?? best, a2 = ac[bl + 1] ?? best, den = a0 - 2 * best + a2, d = den ? 0.5 * (a0 - a2) / den : 0;
+    f.push(SR / (bl + d));
+  }
+  f.sort((p, q) => p - q); return f.length ? f[f.length >> 1] : NaN;
+}
+const synth = (secs, fn) => Float32Array.from({ length: Math.floor(SR * secs) }, (_, i) => fn(i / SR));
+const voice = synth(10, (t) => { let v = 0; for (let k = 1; k <= 10; k++) v += Math.sin(2 * Math.PI * 140 * k * t) / k; return 0.25 * v * (0.8 + 0.2 * Math.sin(2 * Math.PI * 3 * t)); });
+{
+  const a = catchUp(voice, true), b = catchUp(voice, false);
+  const f0 = medianPitch(voice), fa = medianPitch(a.y.subarray(SR)), fb = medianPitch(b.y.subarray(SR));
+  console.log(`9. pitch lock, voice-like tone (140 Hz): input ${f0.toFixed(2)} Hz; pitch-locked catch-up ${fa.toFixed(2)} Hz (${((fa / f0 - 1) * 100).toFixed(2)}%), ${a.stats.splices} cuts, ${(a.removed / SR * 1000).toFixed(0)} ms removed; plain squeeze ${fb.toFixed(2)} Hz (${((fb / f0 - 1) * 100).toFixed(2)}%)`);
+  const sm = (y) => { let m = 0; for (let i = 2; i < y.length; i++) m = Math.max(m, Math.abs(y[i] - 2 * y[i - 1] + y[i - 2])); return m; };
+  assert(Math.abs(fa / f0 - 1) < 0.004, 'pitch must be unchanged while catching up');
+  assert(Math.abs(fb / f0 - 1) > 0.03, 'sanity: the squeeze does change the pitch');
+  assert(a.stats.splices > 10 && a.extraLeft < 0.002, 'it must actually catch up');
+  assert(a.maxStep < sm(voice) * 1.5, 'the cuts must not click');
+}
+// real synthesised speech, if ffmpeg has flite
+try {
+  const raw = execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', "flite=text='The quick brown fox jumps over the lazy dog. Program audio should keep its natural pitch while it catches up. One two three four five six seven eight nine ten.':voice=slt", '-ar', '48000', '-ac', '1', '-f', 'f32le', '-'], { maxBuffer: 1 << 28 });
+  const sp = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength >> 2);
+  const a = catchUp(sp, true), b = catchUp(sp, false), f0 = medianPitch(sp);
+  console.log(`10. pitch lock, real speech: input ${f0.toFixed(1)} Hz; pitch-locked ${medianPitch(a.y).toFixed(1)} Hz (${((medianPitch(a.y) / f0 - 1) * 100).toFixed(2)}%), cuts ${a.stats.splices}, fell back to squeezing ${a.stats.spliceFallbacks}x; plain squeeze ${medianPitch(b.y).toFixed(1)} Hz (${((medianPitch(b.y) / f0 - 1) * 100).toFixed(2)}%)`);
+  assert(Math.abs(medianPitch(a.y) / f0 - 1) < 0.015, 'speech pitch must stay put');
+} catch (e) { if (e.code === 'ERR_ASSERTION') throw e; console.log('10. (speech check skipped: ffmpeg with flite not available)'); }
+// music-like: three unrelated tones, no single cycle to cut. It may fall back to squeezing; it must still catch up.
+{
+  const chord = synth(10, (t) => 0.15 * (Math.sin(2 * Math.PI * 220 * t) + Math.sin(2 * Math.PI * 277.18 * t) + Math.sin(2 * Math.PI * 329.63 * t)));
+  const a = catchUp(chord, true);
+  console.log(`11. chord (no single cycle): ${a.stats.splices} clean cuts, ${a.stats.spliceFallbacks} fallbacks to squeezing; still caught up: extra left ${(a.extraLeft * 1000).toFixed(1)} ms`);
+  assert(a.extraLeft < 0.002, 'must catch up even when no clean cut exists');
 }
 
 // ---- 3. interpolation quality ---------------------------------------------------------------------------

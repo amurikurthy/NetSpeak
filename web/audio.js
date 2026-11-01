@@ -226,7 +226,7 @@ export class Engine {
     const ctx = this.ctx;
     if (ctx.state !== 'running' || v.dead) { data.close(); return; }
     const ch = data.numberOfChannels, n = data.numberOfFrames;
-    const planes = [];
+    let planes = [];
     for (let c = 0; c < ch; c++) {
       const tmp = new Float32Array(n);
       data.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
@@ -239,9 +239,10 @@ export class Engine {
     if (feed && this.clock.ready && v.sp && performance.now() >= this.syncFallbackUntil) {
       // Synchronised: sound this chunk exactly feedDelayMs after its server stamp, like every other listener.
       if (v.legacy) { v.legacy = false; v.sp.next = null; }
-      const r = v.sp.plan(this.serverToCtx(stampUs / 1000 + this.feedDelayMs), now, n);
+      const r = v.sp.plan(this.serverToCtx(stampUs / 1000 + this.feedDelayMs), now, n, planes);
+      if (r.planes) planes = r.planes;   // catching up: a wave cycle was cut out of this chunk (pitch unchanged)
       this.stats.syncCorr = (this.stats.syncCorr || 0) + (r.slip ? 1 : 0);
-      this.syncHealth(v, r.drop || r.when - now > 1.0);   // only a chunk that cannot be played at all counts, not routine corrections
+      this.syncHealth(v, (r.drop && !r.skipped) || r.when - now > 1.0);   // only a chunk that cannot be played at all counts, not routine corrections
       if (r.drop) { this.stats.syncDrops++; return; }   // too late to play in sync: skip it
       when = r.when; slip = r.slip;
     } else {
@@ -253,7 +254,7 @@ export class Engine {
     }
     // Safety nets: never schedule far ahead (a broken clock mapping), and never let a queue grow without bound.
     if (when - now > 1.0 || v.srcs.size > 150) { this.stats.syncDrops++; this.flushVoice(v); return; }
-    const m = n + slip;
+    const m = planes[0].length + slip;
     const ab = ctx.createBuffer(ch, m, 48000);
     for (let c = 0; c < ch; c++) ab.copyToChannel(slip ? stretch(planes[c], m) : planes[c], c);
     const src = ctx.createBufferSource();

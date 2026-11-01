@@ -227,11 +227,10 @@ function render() {
 // A speaker stays highlighted for a moment after they stop, so a name does not flash on and off between words.
 const TAIL_MS = 3000;
 const heard = new Map();      // "roomId:connection" -> when that person was last speaking
-const lastSpoke = {};         // roomId -> the most recent person to speak there (kept for the floating window)
 let tailTimer = 0;
 function notePresence(m) {
   const now = Date.now();
-  for (const [rid, ms] of Object.entries(m.rooms || {})) for (const x of ms || []) if (x.t) { heard.set(rid + ':' + x.c, now); lastSpoke[rid] = { n: x.c === S.c ? 'You' : x.n }; }
+  for (const [rid, ms] of Object.entries(m.rooms || {})) for (const x of ms || []) if (x.t) { heard.set(rid + ':' + x.c, now); }
   scheduleTail();
 }
 const isHot = (rid, x) => !!x.t || Date.now() - (heard.get(rid + ':' + x.c) || 0) < TAIL_MS;
@@ -449,7 +448,7 @@ function feedCard(f) {
   const lvl = f.source ? h('div', { hidden: true }, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Send level'),
     h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.feedGain, oninput: (e) => { prefs.feedGain = +e.target.value; savePrefs(); engine.captures.get('feed')?.setGain(prefs.feedGain); } })) : null;
   const el = h('section', { class: 'card' },
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name), h('div', { class: 'sub' }, f.description || 'Program audio')),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name)),
       live), volBox,
     lvl, h('div', { class: 'row', style: 'margin-top:10px' }, play, src, n));
   cards.set('f' + f.id, () => {
@@ -519,7 +518,7 @@ function pipSupported() {
 function pipModel() {
   const rows = S.rooms.filter((r) => S.joined.has(r.id)).map((r, i) => {
     const ms = S.presence.rooms?.[r.id] || [];
-    return { id: r.id, name: r.name, color: r.color, here: ms.length, order: i, speakers: ms.filter((m) => isHot(r.id, m)).map((m) => (m.c === S.c ? 'You' : m.n)), last: lastSpoke[r.id]?.n || '' };
+    return { id: r.id, name: r.name, color: r.color, here: ms.length, order: i, speakers: ms.filter((m) => isHot(r.id, m)).map((m) => (m.c === S.c ? 'You' : m.n)) };
   });
   rows.sort((a, b) => (b.speakers.length > 0) - (a.speakers.length > 0) || a.order - b.order);
   return { live: S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name), rows };
@@ -543,7 +542,6 @@ function pipBase() {
     g.fillStyle = talking ? '#e8ecf4' : '#aab3c5'; g.font = '600 21px system-ui, sans-serif';
     g.fillText(fit(r.name, g.font, 150), 22, y + 23);
     if (talking) { g.fillStyle = '#4ade80'; g.font = '700 27px system-ui, sans-serif'; g.fillText(fit(r.speakers.join(', '), g.font, W - 190), 180, y + 23); }
-    else if (r.last) { g.fillStyle = '#7d879b'; g.font = '500 20px system-ui, sans-serif'; g.fillText(fit('Last: ' + r.last, g.font, W - 190), 180, y + 23); }   // nobody speaking now: show who spoke last
     else { g.fillStyle = '#6b7487'; g.font = '500 18px system-ui, sans-serif'; g.fillText(r.here ? r.here + (r.here === 1 ? ' person here' : ' people here') : 'empty', 180, y + 23); }
   });
   if (m.rows.length > maxRows) { const rest = m.rows.length - (maxRows - 1); g.fillStyle = '#8a93a6'; g.font = '500 19px system-ui, sans-serif'; g.fillText('+' + rest + ' more room' + (rest === 1 ? '' : 's'), 22, 48 + (maxRows - 1) * rowH + 21); }

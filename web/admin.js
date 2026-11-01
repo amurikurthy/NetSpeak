@@ -135,10 +135,10 @@ function feedsTab() {
       h('button', { onclick: () => ingestInfo(f) }, 'Ingest'), h('button', { onclick: () => feedForm(f) }, 'Edit'), h('button', { class: 'danger', onclick: () => confirmDel(f.name, () => api('DELETE', `/api/admin/feeds/${f.id}`)) }, '✕')))));
 }
 function feedForm(f) {
-  const n = h('input', { type: 'text', value: f?.name || '' }), d = h('input', { type: 'text', value: f?.description || '' }), o = h('input', { type: 'number', value: f?.order ?? D().feeds.length + 1 });
+  const n = h('input', { type: 'text', value: f?.name || '' }), o = h('input', { type: 'number', value: f?.order ?? D().feeds.length + 1 });
   const acl = aclEditor(f?.access || [{ principal: 'everyone', listen: true }], true);
-  sheet(f ? 'Edit feed' : 'New feed', h('div', {}, field('Name', n), field('Description', d), field('Sort order', o), h('h2', {}, 'Who can listen / send'), acl),
-    () => api(f ? 'PUT' : 'POST', f ? `/api/admin/feeds/${f.id}` : '/api/admin/feeds', { name: n.value, description: d.value, order: +o.value, access: acl.get() }));
+  sheet(f ? 'Edit feed' : 'New feed', h('div', {}, field('Name', n), field('Sort order', o), h('h2', {}, 'Who can listen / send'), acl),
+    () => api(f ? 'PUT' : 'POST', f ? `/api/admin/feeds/${f.id}` : '/api/admin/feeds', { name: n.value, order: +o.value, access: acl.get() }));
 }
 function ingestInfo(f) {
   const url = `${location.origin}/ingest/${f.ingestKey}`;

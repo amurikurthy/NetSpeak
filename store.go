@@ -317,7 +317,7 @@ func (d *Data) Seed(adminHash string) {
 		{ID: newID(), Name: "Director", Color: "#a855f7", Order: 3, Access: append([]Grant{}, all...)},
 	}
 	d.Feeds = []*Feed{{
-		ID: newID(), Name: "Program", Description: "Main program audio", Order: 1, IngestKey: newSecret(16),
+		ID: newID(), Name: "Program", Order: 1, IngestKey: newSecret(16),
 		Access: []Grant{{Principal: "everyone", Listen: true}},
 	}}
 }
