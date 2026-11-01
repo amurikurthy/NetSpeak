@@ -28,6 +28,7 @@ export class Engine {
     this.captures = new Map(); // name -> Capture
     this.sinkId = '';
     this.stats = { rx: 0, tx: 0, rxLast: 0, decodeErr: 0, syncDrops: 0, syncCorr: 0 };
+    this.inactive = new Set();      // channels the user stopped: packets still in flight for them are ignored
     this.clock = new ClockSync();   // this device's clock vs the server's
     this.feedDelayMs = 250;         // set by the server: every device plays program audio this long after its stamp
   }
@@ -41,7 +42,9 @@ export class Engine {
 
   async _setup() {
     const ctx = this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
-    ctx.onstatechange = () => this.onState && this.onState();
+    // Whenever the engine is interrupted or comes back, throw away everything queued or half-decoded: it is stale, and
+    // playing it over the live audio sounds distorted.
+    ctx.onstatechange = () => { this.resetVoices(); this.onState && this.onState(); };
     this.master = ctx.createGain();
     this.comms = ctx.createGain();
     this.program = ctx.createGain();
@@ -110,16 +113,24 @@ export class Engine {
     // 1 = room voice [1][chan u16][sender u16][seq u32][opus]; 2 = program feed, same plus a u64 server stamp (us)
     const hdr = type === 2 ? 17 : 9;
     if ((type !== 1 && type !== 2) || dv.byteLength <= hdr || !this.ctx) return;
+    if (this.ctx.state !== 'running') return;   // phone suspended the sound engine: audio cannot play, so do not queue it
     this.stats.rx++; this.stats.rxLast = performance.now();
     const ch = dv.getUint16(1), sender = dv.getUint16(3), seq = dv.getUint32(5);
     const ref = this.chans.get(ch);
-    if (!ref) return;
+    if (!ref || this.inactive.has(ref.kind + ':' + ref.id)) return;
     const key = ch + ':' + sender;
+    if (type === 2 && this.clock.ready) {
+      // A backlog (the page was throttled and a burst arrives at once): packets already past their play time can only
+      // be skipped, so skip them before spending any effort decoding.
+      const lateMs = performance.now() + this.clock.offset - Number(dv.getBigUint64(9)) / 1000 - this.feedDelayMs;
+      if (lateMs > 60) { this.stats.syncDrops++; return; }
+    }
     let v = this.voices.get(key);
     // A stream that resumes after a pause (Stop then Listen, a dropped connection) needs a fresh decoder. The old one
     // keeps counting time from before the pause, so its timestamps come out in the past and every chunk looks too late.
-    // A missing packet number (the server skipped some while we were not listening) means the same thing.
-    if (v && (performance.now() - v.last > 150 || seq !== ((v.seq + 1) >>> 0))) { try { v.dec.close(); } catch {} this.voices.delete(key); v = null; }
+    // A missing packet number (the server skipped some while we were not listening, or the sender restarted) means the same
+    // thing. (Only the packet number is trusted: a throttled page delivers packets in bursts, which is not a pause.)
+    if (v && seq !== ((v.seq + 1) >>> 0)) { this.dropVoice(key, v); v = null; }
     if (!v) { v = this.makeVoice(ref); this.voices.set(key, v); }
     v.last = performance.now(); v.seq = seq;
     const timestamp = type === 2 ? Number(dv.getBigUint64(9)) : seq * 20000;   // feed: the stamp rides through the decoder
@@ -131,7 +142,7 @@ export class Engine {
   makeVoice(ref) {
     const ctx = this.ctx;
     const feed = ref.kind === 'feed';
-    const v = { next: 0, last: 0, ref, sp: feed ? new SyncPlayout(48000) : null };
+    const v = { next: 0, last: 0, ref, sp: feed ? new SyncPlayout(48000) : null, srcs: new Set() };
     v.dec = new AudioDecoder({
       output: (data) => this.play(v, data, feed),
       error: () => { this.stats.decodeErr++; try { v.dec.close(); } catch {} v.dead = true; },
@@ -139,6 +150,19 @@ export class Engine {
     v.dec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: feed ? 2 : 1 });
     return v;
   }
+
+  // Cancel everything this voice has queued and forget its timeline.
+  flushVoice(v) {
+    for (const s of v.srcs) { try { s.stop(); s.disconnect(); } catch {} }
+    v.srcs.clear(); v.next = 0; if (v.sp) v.sp.next = null;
+  }
+  dropVoice(key, v) { this.flushVoice(v); try { v.dec.close(); } catch {} this.voices.delete(key); }
+  resetVoices() { for (const [k, v] of [...this.voices]) this.dropVoice(k, v); }
+  // Stop a room or feed outright (the user pressed Stop / left): its queued audio must not keep playing.
+  dropChannel(kind, id) { for (const [k, v] of [...this.voices]) if (v.ref.kind === kind && v.ref.id === id) this.dropVoice(k, v); }
+  // Stop listening to a channel at once: drop what is queued and ignore the few packets still in flight.
+  stopChannel(kind, id) { this.inactive.add(kind + ':' + id); this.dropChannel(kind, id); }
+  startChannel(kind, id) { this.inactive.delete(kind + ':' + id); }
 
   // Audio-clock time at which the server-clock instant sMs should sound on this device.
   serverToCtx(sMs) {
@@ -150,6 +174,7 @@ export class Engine {
 
   play(v, data, feed) {
     const ctx = this.ctx;
+    if (ctx.state !== 'running' || v.dead) { data.close(); return; }
     const ch = data.numberOfChannels, n = data.numberOfFrames;
     const planes = [];
     for (let c = 0; c < ch; c++) {
@@ -173,12 +198,15 @@ export class Engine {
       if (v.next < now + 0.01 || v.next > now + target * 4 + 0.3) v.next = now + target;   // resync when we underrun or drift far ahead
       when = v.next; v.next += n / 48000;
     }
+    // Safety nets: never schedule far ahead (a broken clock mapping), and never let a queue grow without bound.
+    if (when - now > 1.0 || v.srcs.size > 150) { this.stats.syncDrops++; this.flushVoice(v); return; }
     const m = n + slip;
     const ab = ctx.createBuffer(ch, m, 48000);
     for (let c = 0; c < ch; c++) ab.copyToChannel(slip ? stretch(planes[c], m) : planes[c], c);
     const src = ctx.createBufferSource();
     src.buffer = ab;
     src.connect(this.gainFor(v.ref.kind, v.ref.id));
+    v.srcs.add(src); src.addEventListener('ended', () => v.srcs.delete(src));
     src.start(when);
   }
 

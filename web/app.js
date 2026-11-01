@@ -156,6 +156,7 @@ async function recover(awayMs) {
   if (!S.me) return;
   setWake();
   if (engine.ctx && engine.ctx.state === 'closed') return location.reload();   // the phone destroyed the sound engine: start over
+  if (awayMs > 3000) engine.resetVoices();                                      // anything decoded before leaving is stale
   engine.resume();                                                              // may need a tap on some phones: the banner covers that
   // A connection that was open before an absence is usually dead now, even if it still says "open".
   if (awayMs > 3000 || !ws || ws.readyState !== 1) connect();
@@ -238,8 +239,8 @@ function roomCard(r) {
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
     oninput: (e) => { prefs.roomVol[r.id] = +e.target.value; savePrefs(); applyRoom(r.id); } });
   const sw = h('input', { type: 'checkbox', onchange: async (e) => {
-    if (e.target.checked) { prefs.left = prefs.left.filter((x) => x !== r.id); S.joined.add(r.id); send({ t: 'join', room: r.id }); await engine.start(); applyRoom(r.id); }
-    else { if (!prefs.left.includes(r.id)) prefs.left.push(r.id); if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); }
+    if (e.target.checked) { prefs.left = prefs.left.filter((x) => x !== r.id); engine.startChannel('room', r.id); S.joined.add(r.id); send({ t: 'join', room: r.id }); await engine.start(); applyRoom(r.id); }
+    else { if (!prefs.left.includes(r.id)) prefs.left.push(r.id); if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); engine.stopChannel('room', r.id); }
     persist(); update();
   } });
   const btn = r.talk ? talkButton(r) : null;
@@ -379,8 +380,8 @@ function feedCard(f) {
   // Listener controls. Hidden while this device is the sender: the server never plays a feed back to its own sender.
   const volBox = h('div', {}, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Feed volume'), vol);
   const play = h('button', { class: 'primary', onclick: async () => {
-    if (S.listening.has(f.id)) { if (!prefs.feedsOff.includes(f.id)) prefs.feedsOff.push(f.id); S.listening.delete(f.id); send({ t: 'listen', feed: f.id, on: false }); }
-    else { prefs.feedsOff = prefs.feedsOff.filter((x) => x !== f.id); S.listening.add(f.id); send({ t: 'listen', feed: f.id, on: true }); await engine.start(); applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1); }
+    if (S.listening.has(f.id)) { if (!prefs.feedsOff.includes(f.id)) prefs.feedsOff.push(f.id); S.listening.delete(f.id); send({ t: 'listen', feed: f.id, on: false }); engine.stopChannel('feed', f.id); }
+    else { prefs.feedsOff = prefs.feedsOff.filter((x) => x !== f.id); engine.startChannel('feed', f.id); S.listening.add(f.id); send({ t: 'listen', feed: f.id, on: true }); await engine.start(); applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1); }
     persist(); update();
   } });
   const src = f.source ? h('button', { onclick: () => publishDialog(f) }, 'Send from this device') : null;
