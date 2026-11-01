@@ -26,11 +26,13 @@ export async function api(method, url, body) {
 }
 
 // ---------- prefs ----------
-const defaults = { micId: '', spkId: '', micGain: 1, master: 1, wake: false,
-  roomVol: {}, feedVol: {}, joined: [], listening: [], feedGain: 1, feedback: true, left: [], feedsOff: [], seeded: false, ver: 2 };
+const defaults = { micId: '', spkId: '', micGain: 1, master: 1, wake: true,
+  roomVol: {}, feedVol: {}, joined: [], listening: [], feedGain: 1, left: [], feedsOff: [], seeded: false, ver: 3 };
 export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localStorage.getItem('ns.prefs') || '{}') }; } catch { return { ...defaults }; } })();
 // v2: rooms are no longer all auto-joined. Forget the join list v1 built up so people start with one room.
-if (prefs.ver !== 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; prefs.ver = 2; delete prefs.autoJoin; }
+if (!prefs.ver || prefs.ver < 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; delete prefs.autoJoin; }   // v2: rooms are not all auto-joined
+if (!prefs.ver || prefs.ver < 3) prefs.wake = true;                                                              // v3: keep screen on is the default
+prefs.ver = 3;
 // Volume sliders top out at 100% (normal level, no boost). Cap anything saved from the old 150%/200% range.
 prefs.master = Math.min(1, prefs.master); prefs.micGain = Math.min(1, prefs.micGain);
 for (const m of [prefs.roomVol, prefs.feedVol]) for (const k of Object.keys(m)) m[k] = Math.min(1, m[k]);
@@ -42,13 +44,10 @@ const S = { me: null, rooms: [], feeds: [], presence: { rooms: {}, feeds: {} }, 
 const engine = new Engine();
 let syncTimer = null;
 let ws = null, wsTimer = null, backoff = 500, lastRx = 0, pingTimer = null, voice = null, micPromise = null, micError = '', wakeLock = null;
-let installEvt = null, lastFbToast = 0, swState = 'not started';
+let lastFbToast = 0;
 const root = $('#app');
 
-addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });
-if ('serviceWorker' in navigator) {
-  addEventListener('load', () => navigator.serviceWorker.register('/sw.js').then(() => { swState = 'registered'; }).catch((e) => { swState = 'FAILED: ' + e.message; }));
-} else swState = 'not supported by this browser';
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 
 // ---------- boot ----------
 async function boot() {
@@ -285,7 +284,7 @@ function micOpts() {
     // Browser echo cancellation is OFF on purpose: on Android it switches the whole phone into "call" audio mode
     // (a separate call volume slider, wrong routing). Echo is removed by our own software canceller in the mic
     // worklet (aec: it learns from what this device is playing), and howling by the feedback suppressor.
-    ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: prefs.feedback, aec: true,
+    ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: true, aec: true,
     onAec: (db) => { S.aecDb = db; },
     onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
     onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; vadFrame(l); },
@@ -410,59 +409,6 @@ function stopPublish(fromServer) {
   update();
 }
 
-// Install button: use the browser's prompt when it has offered one, otherwise say how to install from its own menu.
-function installApp() {
-  if (installEvt) { installEvt.prompt(); return; }
-  const ua = navigator.userAgent;
-  const how = /iPhone|iPad|iPod/.test(ua) ? 'In Safari, tap the Share button, then "Add to Home Screen". (Other iPhone browsers cannot install apps.)'
-    : /SamsungBrowser/.test(ua) ? 'Tap the menu (three lines), then "Add page to", then "Home screen".'
-    : /Firefox/.test(ua) ? 'Tap the menu (⋮), then "Install".'
-    : 'In Chrome, tap the menu (⋮), then "Install app" or "Add to Home screen". If you only see "Add to Home screen", run "Check why the app can\'t install" below.';
-  toast(how, 9000);
-}
-
-// ----- install self-check -----
-// Walks through what a browser needs before it offers to install the app and reports what this device actually sees.
-async function installReport() {
-  const out = [], ok = (b, msg) => out.push((b ? '✓ ' : '✗ ') + msg);
-  const ua = navigator.userAgent;
-  const browser = /SamsungBrowser/.test(ua) ? 'Samsung Internet' : /Firefox|FxiOS/.test(ua) ? 'Firefox' : /EdgA|Edg\//.test(ua) ? 'Edge' : /OPR|Opera/.test(ua) ? 'Opera' : /CriOS/.test(ua) ? 'Chrome on iPhone (cannot install)' : /Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : 'unknown';
-  out.push(`browser: ${browser}${/; wv\)|FBAN|FBAV|Instagram|Line\//.test(ua) ? ' (looks like an in-app browser: open the link in Chrome itself)' : ''}`);
-  ok(isSecureContext && location.protocol === 'https:' || location.hostname === 'localhost', `trusted https (${location.protocol}//${location.host})`);
-  ok(!matchMedia('(display-mode: standalone)').matches && !navigator.standalone, 'not already running as an installed app');
-  try {
-    // Browsers fetch the manifest with or without cookies depending on the page; check both, because a proxy that
-    // demands a login (basic auth, Authelia, Cloudflare Access...) will refuse the one without.
-    const plain = await fetch('/manifest.webmanifest', { credentials: 'omit', cache: 'no-store' }).catch((e) => ({ ok: false, status: 'network error: ' + e.message, headers: new Headers(), url: '' }));
-    const authed = await fetch('/manifest.webmanifest', { credentials: 'include', cache: 'no-store' }).catch(() => null);
-    const note = (r) => r && r.redirected ? ` (redirected to ${new URL(r.url).host + new URL(r.url).pathname})` : '';
-    ok(plain.ok, `manifest fetched without cookies: HTTP ${plain.status}, ${plain.headers.get('content-type')}${note(plain)}`);
-    if (authed) ok(authed.ok, `manifest fetched with cookies: HTTP ${authed.status}, ${authed.headers.get('content-type')}${note(authed)}`);
-    if (!plain.ok && authed && authed.ok) out.push('   -> your proxy only serves it to logged-in requests; this version sends cookies with the manifest, so reload twice and retry');
-    if (!plain.ok && !(authed && authed.ok)) out.push('   -> your proxy or CDN is blocking or redirecting /manifest.webmanifest: allow that path (and /sw.js and /icons/) without a login');
-    const r = authed && authed.ok ? authed : plain;
-    if (!r.ok) throw new Error('manifest could not be loaded');
-    const m = await r.json();
-    ok(!!(m.name || m.short_name) && !!m.start_url && ['standalone', 'fullscreen', 'minimal-ui'].includes(m.display), `manifest has name, start_url, display "${m.display}"`);
-    for (const ic of m.icons || []) {
-      try {
-        const ir = await fetch(ic.src, { credentials: 'omit', cache: 'no-store' }); const bl = await ir.blob();
-        let dims = ''; try { const bmp = await createImageBitmap(bl); dims = ` ${bmp.width}x${bmp.height}`; } catch { dims = ' (cannot decode)'; }
-        ok(ir.ok && /^image\//.test(bl.type), `icon ${ic.src}: HTTP ${ir.status}, ${bl.type}, ${bl.size} B${dims}, declared ${ic.sizes}`);
-      } catch (e) { ok(false, `icon ${ic.src}: ${e.message}`); }
-    }
-    ok((m.icons || []).some((i) => /192/.test(i.sizes)) && (m.icons || []).some((i) => /512/.test(i.sizes)), 'has 192 and 512 pixel icons');
-  } catch (e) { ok(false, 'manifest: ' + e.message); }
-  try {
-    const reg = await navigator.serviceWorker.getRegistration();
-    ok(!!reg && !!reg.active, `service worker: ${reg ? (reg.active ? 'active (' + reg.active.state + ')' : reg.installing ? 'still installing' : reg.waiting ? 'waiting' : 'not active') : 'not registered'}`);
-    ok(!!navigator.serviceWorker.controller, 'page is controlled by the service worker (reload once if not)');
-    const sr = await fetch('/sw.js', { cache: 'no-store' }); ok(sr.ok && /javascript/.test(sr.headers.get('content-type') || ''), `sw.js: HTTP ${sr.status}, ${sr.headers.get('content-type')}`);
-  } catch (e) { ok(false, 'service worker: ' + e.message); }
-  ok(!!installEvt, installEvt ? 'browser has offered the install prompt' : 'browser has not offered the install prompt' + (browser.startsWith('Chrome') || browser === 'Edge' ? ' (Chrome stays quiet in Incognito, or if the app is already installed: look for "Open" in the ⋮ menu)' : ' (this browser installs from its own menu instead: ⋮ or Share, then Install / Add to Home screen)'));
-  return out.join('\n');
-}
-
 // ----- settings -----
 async function settings() {
   let ins = [], outs = [];
@@ -474,20 +420,17 @@ async function settings() {
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
   const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
   const diag = h('pre', { style: 'white-space:pre-wrap' });
-  const instOut = h('pre', { style: 'white-space:pre-wrap' });
   const tick = () => {
     const st = engine.stats, v = engine.captures.get('voice');
     diag.textContent = [
       `connection:   ${S.connected ? 'online' : 'OFFLINE'}`,
-      `https:        ${isSecureContext ? (location.protocol === 'https:' ? 'yes, trusted' : 'ok (localhost)') : location.protocol === 'https:' ? 'yes, but NOT trusted (certificate warning)' : 'NO: installing needs a trusted HTTPS address'}`,
-      `app install:  ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'running as an installed app' : installEvt ? 'ready: use Install app below' : 'not offered yet (see service worker line)'} · service worker ${swState}`,
       `codec:        ${supported ? 'WebCodecs Opus OK' : 'NOT SUPPORTED in this browser'}`,
       `audio engine: ${engine.ctx ? engine.ctx.state : 'not started'}${engine.el?.paused ? ' (output paused)' : ''}`,
       `microphone:   ${v ? (v.track?.readyState + ' / ' + (v.track?.label || '?') + (v.track?.muted ? ' (MUTED by OS)' : '')) : 'closed'}`,
       `joined rooms: ${S.rooms.filter((r) => S.joined.has(r.id)).map((r) => r.name + (r.talk ? '' : ' (listen only)')).join(', ') || 'none'}`,
       `talking in:   ${S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name).join(', ') || 'nobody'}`,
       `echo cancel:  ${S.aecDb === undefined ? 'waiting for sound to learn from' : S.aecDb > 6 ? 'working, removing about ' + S.aecDb + ' dB of echo' : 'learning (' + S.aecDb + ' dB so far)'}`,
-      `feedback:     ${prefs.feedback ? 'protection on' : 'protection OFF'}${S.fb ? ` · ${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : ' · none detected'}`,
+      `feedback:     ${S.fb ? `${S.fb.notches} tone(s) cut, send level ${S.fb.guardDb.toFixed(0)} dB` : 'none detected'}`,
       `feed sync:    ${engine.clock.ready ? `clock within ±${engine.clock.uncertaintyMs.toFixed(0)} ms of the server` : 'measuring…'} · plays ${engine.feedDelayMs} ms after server stamp · ${st.syncDrops} late chunks skipped`,
       `packets sent: ${st.tx}   received: ${st.rx}${st.rx ? ' (' + Math.round((performance.now() - st.rxLast) / 1000) + 's ago)' : ''}   decode errors: ${st.decodeErr}`,
     ].join('\n');
@@ -501,14 +444,11 @@ async function settings() {
     h('label', { class: 'f' }, 'Input device' + (labeled ? '' : ' (talk once to list names)')), mic,
     h('h2', {}, 'Listening'),
     outs.length && h('div', {}, h('label', { class: 'f' }, 'Output device'), spk),
-    chk('Automatic feedback protection (cuts howling tones on your mic; you can still hear everyone while you talk)', 'feedback', () => { voice?.setFeedback(prefs.feedback); }),
     chk('Keep screen on', 'wake', setWake),
     h('p', { class: 'sub' }, 'Earbud button: click toggles talk (latched) in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,
-    h('div', { style: 'margin:8px 0' }, h('button', { onclick: async (e) => { e.target.disabled = true; instOut.textContent = 'Checking…'; instOut.textContent = await installReport(); e.target.disabled = false; } }, 'Check why the app can\'t install')), instOut,
     h('h2', {}, 'Account'),
     h('button', { onclick: changePassword }, 'Change password'),
-    !(matchMedia('(display-mode: standalone)').matches || navigator.standalone) && h('button', { style: 'margin-left:8px', onclick: installApp }, 'Install app'),
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);
 }

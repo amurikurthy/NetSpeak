@@ -69,7 +69,7 @@ location / {
 
 Traefik: add the service with `scheme: https` and a `serversTransport` with `insecureSkipVerify: true`.
 
-**Behind a login (Pangolin, Authelia, Cloudflare Access, basic auth).** The app is installable as long as the proxy lets three things through: `/manifest.webmanifest`, `/sw.js` and `/icons/`. The page asks the browser to send your login cookie with the manifest request (`crossorigin="use-credentials"`), which is enough for most setups. If installing still fails, add a rule that skips authentication for those paths (in Pangolin: a resource rule allowing them), then check Settings → Diagnostics → "Check why the app can't install".
+**Behind a login (Pangolin, Authelia, Cloudflare Access, basic auth).** The app is installable as long as the proxy lets three things through: `/manifest.webmanifest`, `/sw.js` and `/icons/`. The page asks the browser to send your login cookie with the manifest request (`crossorigin="use-credentials"`), which is enough for most setups. If installing still fails, add a rule that skips authentication for those paths (in Pangolin: a resource rule allowing them).
 
 To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks plain HTTP on 8080 (map `8080:8080` and proxy to `http://netspeak:8080`). Opening the container directly without a proxy also works: you get a browser warning once.
 
