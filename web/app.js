@@ -371,7 +371,8 @@ function makeMeter() {
     disp = Math.max(Number.isFinite(rms) ? rms : -90, disp - 28 * dt);
     if (disp > peak) { peak = disp; peakAt = now; } else if (now - peakAt > 1000) peak = Math.max(disp, peak - 20 * dt);
     mask.style.width = (100 - pct(disp)) + '%';
-    tick.style.left = pct(peak) + '%'; tick.style.display = peak > -58 ? 'block' : 'none';
+    tick.style.left = 'calc(' + pct(peak) + '% - 2px)';   // the line ends exactly where the bar ends
+    tick.style.display = peak > -58 ? 'block' : 'none';
   } };
 }
 const meters = new Map();   // key -> { m, get, el }
@@ -541,7 +542,7 @@ function pipDraw(force) {
     for (const [from, to, col] of [[0, .5, '#22c55e'], [.5, .65, '#eab308'], [.65, .8, '#f97316'], [.8, 1, '#ef4444']]) {
       const a = Math.round(w * from), b = Math.min(lit, Math.round(w * to)); if (b > a) { g.fillStyle = col; g.fillRect(x + a, y, b - a, 10); }
     }
-    if (pip.peak > -58) { g.fillStyle = '#fff'; g.fillRect(x + Math.min(w - 2, Math.round(w * pct(pip.peak))), y, 2, 10); }
+    if (pip.peak > -58) { g.fillStyle = '#fff'; g.fillRect(x + Math.max(0, Math.min(w, Math.round(w * pct(pip.peak))) - 2), y, 2, 10); }
   }
   if (pip.track && pip.track.requestFrame) pip.track.requestFrame();   // push the new picture out at once
 }
