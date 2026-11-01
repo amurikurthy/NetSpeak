@@ -224,7 +224,7 @@ function render() {
   update();
 }
 
-function update() { for (const c of cards.values()) c(); audioBanner(); pipDraw(); }
+function update() { for (const c of cards.values()) c(); audioBanner(); pip.baseOk = false; pipDraw(); }
 
 // Browsers only start audio after a tap/click. Rooms remembered from a previous visit are re-joined
 // automatically, so without this the room looks joined while nothing is actually playing.
@@ -494,8 +494,8 @@ function stopPublish(fromServer) {
 // ----- floating "who is talking" window (Picture-in-Picture) -----
 // A small always-on-top window, like a video, so you can use other apps and still see who is speaking. A phone cannot
 // float arbitrary buttons, only video, so the status is drawn on a canvas and shown as a video.
-const PIP_MS = 8;   // floating-window redraw interval: about 120 a second
-const pip = { video: null, canvas: null, g: null, track: null, on: false, timer: 0, disp: -90, peak: -90, peakAt: 0, last: 0 };
+const PIP_FAST = 33, PIP_SLOW = 100;   // floating-window meter redraw interval (ms): about 30 a second, easing to 10 on a phone that cannot keep up
+const pip = { video: null, canvas: null, bg: null, baseOk: false, ms: PIP_FAST, tickAt: 0, slow: 0, g: null, track: null, on: false, timer: 0, disp: -90, peak: -90, peakAt: 0, last: 0 };
 function pipSupported() {
   return !!HTMLCanvasElement.prototype.captureStream && !!(document.pictureInPictureEnabled || HTMLVideoElement.prototype.webkitSetPresentationMode);
 }
@@ -508,10 +508,10 @@ function pipModel() {
   rows.sort((a, b) => (b.speakers.length > 0) - (a.speakers.length > 0) || a.order - b.order);
   return { live: S.rooms.filter((r) => S.talking.has(r.id)).map((r) => r.name), rows };
 }
-function pipDraw(force) {
-  if (!pip.on && !force) return;
-  if (!pip.canvas) { pip.canvas = document.createElement('canvas'); pip.canvas.width = 480; pip.canvas.height = 270; }
-  const g = pip.g = pip.g || pip.canvas.getContext('2d'), W = 480, H = 270, m = pipModel();
+// The names, rooms and header change only on events, so they are drawn once into a spare canvas and reused; only the
+// level meter is redrawn on each tick. That keeps the floating window cheap enough for slow phones.
+function pipBase() {
+  const g = pip.bg.getContext('2d'), W = 480, H = 270, m = pipModel();
   const fit = (t, px, maxW) => { g.font = px; if (g.measureText(t).width <= maxW) return t; while (t.length > 1 && g.measureText(t + '…').width > maxW) t = t.slice(0, -1); return t + '…'; };
   g.fillStyle = '#0b0d12'; g.fillRect(0, 0, W, H);
   // header: red and clear when your own mic is live
@@ -530,6 +530,13 @@ function pipDraw(force) {
     else { g.fillStyle = '#6b7487'; g.font = '500 18px system-ui, sans-serif'; g.fillText(r.here ? r.here + (r.here === 1 ? ' person here' : ' people here') : 'empty', 180, y + 23); }
   });
   if (m.rows.length > maxRows) { const rest = m.rows.length - (maxRows - 1); g.fillStyle = '#8a93a6'; g.font = '500 19px system-ui, sans-serif'; g.fillText('+' + rest + ' more room' + (rest === 1 ? '' : 's'), 22, 48 + (maxRows - 1) * rowH + 21); }
+}
+function pipDraw(force, tick) {
+  if (!pip.on && !force) return;
+  if (!pip.canvas) { pip.canvas = document.createElement('canvas'); pip.canvas.width = 480; pip.canvas.height = 270; pip.bg = document.createElement('canvas'); pip.bg.width = 480; pip.bg.height = 270; pip.baseOk = false; }
+  const g = pip.g = pip.g || pip.canvas.getContext('2d'), W = 480;
+  if (!tick || !pip.baseOk) { pipBase(); pip.baseOk = true; }
+  g.drawImage(pip.bg, 0, 0);
   // listening level: the same colours, falling and peak line as the meters in the app
   {
     const now = performance.now(), lv = engine.ctx ? engine.masterLevel() : { rms: -90, peak: -90 }, dt = pip.last ? Math.min(0.5, (now - pip.last) / 1000) : 0.1; pip.last = now;
@@ -548,8 +555,18 @@ function pipDraw(force) {
 }
 // While the window is open the level meter needs a steady redraw (the rest of the picture only changes on events).
 function pipOn(on) {
-  pip.on = on; clearInterval(pip.timer); pip.timer = 0;
-  if (on) { pipDraw(); pip.timer = setInterval(() => pipDraw(), PIP_MS); }
+  pip.on = on; clearTimeout(pip.timer); pip.timer = 0;
+  if (!on) return;
+  pip.ms = PIP_FAST; pip.slow = 0; pip.tickAt = 0; pip.baseOk = false; pipDraw();
+  const loop = () => {
+    const t = performance.now();
+    // If ticks keep arriving much later than asked, the phone is struggling: draw less often rather than lag behind.
+    if (pip.tickAt) { if (t - pip.tickAt > pip.ms * 1.8) { if (++pip.slow >= 8 && pip.ms < PIP_SLOW) { pip.ms = PIP_SLOW; } } else if (pip.slow > 0) pip.slow--; }
+    pip.tickAt = t;
+    pipDraw(false, true);
+    pip.timer = setTimeout(loop, pip.ms);
+  };
+  pip.timer = setTimeout(loop, pip.ms);
 }
 async function pipToggle() {
   try {
@@ -558,7 +575,7 @@ async function pipToggle() {
     if (!pipSupported()) return toast('A floating window is not supported by this browser.');
     if (!pip.video) {
       pipDraw(true);
-      const stream = pip.canvas.captureStream(120);
+      const stream = pip.canvas.captureStream(30);
       pip.track = stream.getVideoTracks()[0];
       const v = pip.video = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = stream;
@@ -663,5 +680,5 @@ function pocketLock() {
   document.body.append(o);
 }
 
-window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms), setMeter, pip: { model: () => pipModel(), draw: () => pipDraw(true), canvas: () => pip.canvas } };
+window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms), setMeter, pip: { model: () => pipModel(), draw: () => pipDraw(true), tick: () => pipDraw(false, true), state: () => ({ ms: pip.ms }), canvas: () => pip.canvas } };
 boot();
