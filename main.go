@@ -73,7 +73,6 @@ func main() {
 	mux.HandleFunc("POST /api/login", auth.handleLogin)
 	mux.HandleFunc("POST /api/logout", auth.handleLogout)
 	mux.HandleFunc("GET /api/me", auth.require(auth.handleMe))
-	mux.HandleFunc("POST /api/me", auth.require(auth.handleMe))
 	mux.HandleFunc("GET /ws", hub.ServeWS)
 	mux.HandleFunc("PUT /ingest/{key}", hub.handleIngest)
 	mux.HandleFunc("POST /ingest/{key}", hub.handleIngest)

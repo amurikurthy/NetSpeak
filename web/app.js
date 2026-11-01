@@ -81,6 +81,7 @@ async function appView() {
   }
   cards = new Map(); sig = '';
   ui.dot = h('span', { class: 'dot' });
+  ui.who = h('div', { class: 'who' }, S.me.displayName);
   ui.rooms = h('div'); ui.feeds = h('div'); ui.warn = h('div');
   ui.audio = h('div', { class: 'warn', hidden: true, style: 'cursor:pointer;font-weight:600', onclick: () => enableAudio() }, '🔇 Audio is off: tap here to start listening');
   ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);   // ui.mic is the mask over the unlit part of the bar
@@ -89,10 +90,10 @@ async function appView() {
   const lv = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
   engine.vol.master = prefs.master;
   root.replaceChildren(
-    h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, 'NetSpeak'),
+    h('div', { class: 'top' }, h('div', { class: 'brand' }, ui.dot, h('div', {}, h('div', {}, 'NetSpeak'), ui.who)),
       S.me.role === 'admin' && h('button', { class: 'ghost', onclick: () => { location.hash = '#admin'; } }, 'Admin'),
-      h('button', { class: 'ghost', onclick: pocketLock }, '🔒 Pocket lock'),
-      h('button', { class: 'ghost', onclick: settings }, '⚙ Settings')),
+      h('button', { class: 'ghost', title: 'Pocket lock', 'aria-label': 'Pocket lock', onclick: pocketLock }, '🔒', h('span', { class: 'lbl' }, ' Pocket lock')),
+      h('button', { class: 'ghost', title: 'Settings', 'aria-label': 'Settings', onclick: settings }, '⚙', h('span', { class: 'lbl' }, ' Settings'))),
     h('div', { class: 'wrap' }, ui.warn, ui.audio, h('h2', {}, 'Rooms'), ui.rooms, h('h2', {}, 'Program feeds'), ui.feeds),
     h('div', { class: 'bar' }, h('div', { class: 'in' },
       h('div', {}, h('label', {}, h('span', {}, 'Listening volume')), lv),
@@ -170,6 +171,7 @@ function onMsg(m) {
       const rooms = m.rooms || [], feeds = m.feeds || [];   // a user with no access gets empty lists, never null
       if (m.feedDelayMs) engine.feedDelayMs = m.feedDelayMs;
       S.rooms = rooms; S.feeds = feeds; S.c = m.you.c; S.me = { ...S.me, displayName: m.you.name, role: m.you.role };
+      if (ui.who) ui.who.textContent = m.you.name;   // an admin may rename this user while they are connected
       engine.registerChannels(rooms, feeds);
       const ids = new Set(rooms.map((r) => r.id)), fids = new Set(feeds.map((f) => f.id));
       // Rooms: remembered ones, plus (by default) every room this user can hear except those they left on purpose.
@@ -446,7 +448,6 @@ async function settings() {
   const mic = h('select', { onchange: (e) => { prefs.micId = e.target.value; savePrefs(); reopenMic(); } }, h('option', { value: '' }, 'System default'), ins.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.micId)));
   const spk = h('select', { onchange: (e) => { prefs.spkId = e.target.value; savePrefs(); engine.setSink(prefs.spkId); } }, h('option', { value: '' }, 'System default'), outs.filter((d) => d.deviceId && d.deviceId !== 'default').map((d) => opt(d, prefs.spkId)));
   const chk = (label, key, fn) => h('label', { class: 'row', style: 'margin:12px 0' }, h('label', { class: 'sw' }, h('input', { type: 'checkbox', checked: !!prefs[key], onchange: (e) => { prefs[key] = e.target.checked; savePrefs(); fn?.(); } }), h('i')), h('span', { class: 'grow' }, label));
-  const name = h('input', { type: 'text', value: S.me.displayName, maxlength: 40 });
   const diag = h('pre', { style: 'white-space:pre-wrap' });
   const tick = () => {
     const st = engine.stats, v = engine.captures.get('voice');
@@ -467,7 +468,6 @@ async function settings() {
   const close = () => { clearInterval(dt); sheet.remove(); };
   const sheet = h('div', { class: 'sheet', onclick: (e) => { if (e.target === sheet) close(); } }, h('div', {},
     h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Settings'), h('button', { class: 'ghost', onclick: close }, '✕')),
-    h('label', { class: 'f' }, 'Your name'), h('div', { class: 'row' }, name, h('button', { onclick: async () => { try { S.me = await api('POST', '/api/me', { displayName: name.value }); toast('Saved'); location.reload(); } catch (e) { toast(e.message); } } }, 'Save')),
     h('h2', {}, 'Microphone'),
     h('label', { class: 'f' }, 'Input device' + (labeled ? '' : ' (talk once to list names)')), mic,
     h('h2', {}, 'Listening'),
@@ -476,20 +476,11 @@ async function settings() {
     h('p', { class: 'sub' }, 'Earbud button: click toggles talk (latched) in the active room (next-track switches room). Audio keeps playing with the screen off. For the best background behaviour install the app (Add to Home Screen) and keep it in the recent apps list.'),
     h('h2', {}, 'Diagnostics'), diag,
     h('h2', {}, 'Account'),
-    h('button', { onclick: changePassword }, 'Change password'),
-    h('button', { style: 'margin-left:8px', onclick: () => location.reload() }, 'Reload app'),
+    h('button', { onclick: () => location.reload() }, 'Reload app'),
     h('button', { class: 'danger', style: 'margin-left:8px', onclick: async () => { await api('POST', '/api/logout'); location.href = '/'; } }, 'Sign out')));
   document.body.append(sheet);
 }
 async function reopenMic() { if (voice) { const was = voice.sending; await closeMic(); const v = await ensureMic(); if (v) v.sending = was; } }
-function changePassword() {
-  const o = h('input', { type: 'password', autocomplete: 'current-password' }), n = h('input', { type: 'password', autocomplete: 'new-password' });
-  const close = () => sheet.remove();
-  const sheet = h('div', { class: 'sheet', onclick: (e) => { if (e.target === sheet) close(); } }, h('div', {},
-    h('h3', {}, 'Change password'), h('label', { class: 'f' }, 'Current password'), o, h('label', { class: 'f' }, 'New password'), n,
-    h('div', { class: 'row', style: 'margin-top:16px' }, h('button', { class: 'primary', onclick: async () => { try { await api('POST', '/api/me', { oldPassword: o.value, newPassword: n.value }); toast('Password changed'); close(); } catch (e) { toast(e.message); } } }, 'Change'), h('button', { onclick: close }, 'Cancel'))));
-  document.body.append(sheet);
-}
 
 // ----- background / lock-screen niceties -----
 function updateMediaSession() {

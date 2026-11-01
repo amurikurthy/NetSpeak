@@ -208,52 +208,7 @@ func (a *Auth) requireAdmin(next func(http.ResponseWriter, *http.Request, *User)
 	})
 }
 
-// handleMe returns the profile (GET) or updates display name / password (POST).
+// handleMe returns the signed-in user's profile. Names and passwords are managed by admins only.
 func (a *Auth) handleMe(w http.ResponseWriter, r *http.Request, u *User) {
-	if r.Method == http.MethodGet {
-		writeJSON(w, 200, publicUser(u))
-		return
-	}
-	var in struct {
-		DisplayName string `json:"displayName"`
-		OldPassword string `json:"oldPassword"`
-		NewPassword string `json:"newPassword"`
-	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil {
-		writeErr(w, 400, "bad request")
-		return
-	}
-	if in.NewPassword != "" {
-		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.OldPassword)) != nil {
-			writeErr(w, 403, "current password is wrong")
-			return
-		}
-	}
-	var updated *User
-	err := a.st.Update(func(d *Data) error {
-		x := d.UserByID(u.ID)
-		if x == nil {
-			return errNotFound
-		}
-		if n := strings.TrimSpace(in.DisplayName); n != "" && len(n) <= 40 {
-			x.DisplayName = n
-		}
-		if in.NewPassword != "" {
-			h, err := hashPassword(in.NewPassword)
-			if err != nil {
-				return err
-			}
-			x.PasswordHash = h
-			x.TokenVersion++
-		}
-		cp := *x
-		updated = &cp
-		return nil
-	})
-	if err != nil {
-		writeErr(w, 500, "could not save")
-		return
-	}
-	a.issue(w, r, updated)
-	writeJSON(w, 200, publicUser(updated))
+	writeJSON(w, 200, publicUser(u))
 }

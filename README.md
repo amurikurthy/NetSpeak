@@ -137,7 +137,7 @@ ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=2
 
 The key is shown in Admin, Feeds, Ingest. Use 20 ms frames. Opus is lossy, but at 192 kbps it is transparent for monitoring. It is not bit-exact PCM.
 
-**Settings** (in the app): your name, microphone and speaker choice, keep screen on, Diagnostics, change password, reload, sign out. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller, the feedback suppressor and the program-feed clock sync, which is the first place to look when something sounds wrong.
+**Settings** (in the app): microphone and speaker choice, keep screen on, Diagnostics, reload, sign out. People cannot change their own name or password: only an admin can, under Admin, Users. The signed-in name is shown under the app name in the top bar. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller, the feedback suppressor and the program-feed clock sync, which is the first place to look when something sounds wrong.
 
 ## How it works
 
