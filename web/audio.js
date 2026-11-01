@@ -116,8 +116,12 @@ export class Engine {
     if (!ref) return;
     const key = ch + ':' + sender;
     let v = this.voices.get(key);
+    // A stream that resumes after a pause (Stop then Listen, a dropped connection) needs a fresh decoder. The old one
+    // keeps counting time from before the pause, so its timestamps come out in the past and every chunk looks too late.
+    // A missing packet number (the server skipped some while we were not listening) means the same thing.
+    if (v && (performance.now() - v.last > 150 || seq !== ((v.seq + 1) >>> 0))) { try { v.dec.close(); } catch {} this.voices.delete(key); v = null; }
     if (!v) { v = this.makeVoice(ref); this.voices.set(key, v); }
-    v.last = performance.now();
+    v.last = performance.now(); v.seq = seq;
     const timestamp = type === 2 ? Number(dv.getBigUint64(9)) : seq * 20000;   // feed: the stamp rides through the decoder
     try {
       v.dec.decode(new EncodedAudioChunk({ type: 'key', timestamp, data: new Uint8Array(buf, hdr) }));

@@ -36,6 +36,9 @@ type feedState struct {
 	last   time.Time
 	seq    uint32
 	clock  feedClock
+	// Browser publishers number their own packets; a jump means the source paused or restarted.
+	lastSeq uint32
+	haveSeq bool
 }
 
 type outMsg struct {
@@ -348,6 +351,10 @@ func (h *Hub) claimFeed(id, src string) bool {
 	if fs.source != "" && fs.source != src && time.Since(fs.last) < 4*time.Second {
 		return false
 	}
+	if fs.source != src { // a new stream: the old stamps say nothing about it, so start the clock afresh
+		fs.clock = feedClock{}
+		fs.haveSeq = false
+	}
 	fs.source, fs.last = src, time.Now()
 	h.dirty.Store(true)
 	return true
@@ -433,6 +440,11 @@ func (h *Hub) route(c *Client, data []byte) {
 		if fs := h.feeds[ref.id]; fs != nil && fs.source == "ws:"+itoa(c.id) {
 			now := time.Now()
 			fs.last = now
+			seq := binary.BigEndian.Uint32(data[3:7])
+			if fs.haveSeq && seq != fs.lastSeq+1 { // packets are missing: the source paused, so stamp from scratch
+				fs.clock = feedClock{}
+			}
+			fs.lastSeq, fs.haveSeq = seq, true
 			stamp = fs.clock.stamp(now.UnixMicro(), opusDuration(data[7:]).Microseconds())
 		}
 		h.mu.Unlock()
