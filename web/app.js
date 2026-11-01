@@ -344,7 +344,7 @@ function ensureMic() {
 }
 async function closeMic() { if (voice) { const v = voice; voice = null; await engine.stopCapture('voice'); setMeter(0); } }
 // Level meter in dB: -60 dBFS at the left edge to 0 dBFS at the right. The colour bands are fixed on the bar
-// (green, yellow from -24 dB, orange from -15 dB, red from -6 dB); the level only decides how much is lit.
+// (green, yellow from -30 dB, orange from -21 dB, red from -12 dB); the level only decides how much is lit.
 function setMeter(l) {
   if (!ui.micMeter) return;
   const db = 20 * Math.log10(Math.max(Number.isFinite(l) ? l : 0, 1e-5));
@@ -362,7 +362,7 @@ function makeMeter() {
   return { el, update(rms, pk, now) {
     const dt = last ? Math.min(0.2, (now - last) / 1000) : 0.016; last = now;
     disp = Math.max(Number.isFinite(rms) ? rms : -90, disp - 28 * dt);
-    if (pk > peak) { peak = pk; peakAt = now; } else if (now - peakAt > 1000) peak = Math.max(disp, peak - 20 * dt);
+    if (disp > peak) { peak = disp; peakAt = now; } else if (now - peakAt > 1000) peak = Math.max(disp, peak - 20 * dt);
     mask.style.width = (100 - pct(disp)) + '%';
     tick.style.left = pct(peak) + '%'; tick.style.display = peak > -58 ? 'block' : 'none';
   } };
@@ -524,12 +524,12 @@ function pipDraw(force) {
   {
     const now = performance.now(), lv = engine.ctx ? engine.masterLevel() : { rms: -90, peak: -90 }, dt = pip.last ? Math.min(0.5, (now - pip.last) / 1000) : 0.1; pip.last = now;
     pip.disp = Math.max(Number.isFinite(lv.rms) ? lv.rms : -90, pip.disp - 28 * dt);
-    if (lv.peak > pip.peak) { pip.peak = lv.peak; pip.peakAt = now; } else if (now - pip.peakAt > 1000) pip.peak = Math.max(pip.disp, pip.peak - 20 * dt);
+    if (pip.disp > pip.peak) { pip.peak = pip.disp; pip.peakAt = now; } else if (now - pip.peakAt > 1000) pip.peak = Math.max(pip.disp, pip.peak - 20 * dt);
     const x = 96, w = W - 12 - x, y = 254, pct = (db) => Math.max(0, Math.min(1, (db + 60) / 60));
     g.fillStyle = '#8a93a6'; g.font = '500 15px system-ui, sans-serif'; g.fillText('Listening', 12, y + 5);
     g.fillStyle = '#1c2230'; g.fillRect(x, y, w, 10);
     const lit = Math.round(w * pct(pip.disp));
-    for (const [from, to, col] of [[0, .6, '#22c55e'], [.6, .75, '#eab308'], [.75, .9, '#f97316'], [.9, 1, '#ef4444']]) {
+    for (const [from, to, col] of [[0, .5, '#22c55e'], [.5, .65, '#eab308'], [.65, .8, '#f97316'], [.8, 1, '#ef4444']]) {
       const a = Math.round(w * from), b = Math.min(lit, Math.round(w * to)); if (b > a) { g.fillStyle = col; g.fillRect(x + a, y, b - a, 10); }
     }
     if (pip.peak > -58) { g.fillStyle = '#fff'; g.fillRect(x + Math.min(w - 2, Math.round(w * pct(pip.peak))), y, 2, 10); }
