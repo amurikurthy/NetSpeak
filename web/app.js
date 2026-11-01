@@ -371,11 +371,8 @@ const meters = new Map();   // key -> { m, get, el }
 let meterRaf = 0;
 let lagMax = 0;   // longest time the page's main thread was stuck, measured with a 50 ms timer
 { let t = performance.now(); setInterval(() => { const n = performance.now(); lagMax = Math.max(lagMax, Math.round(n - t - 50)); t = n; }, 50); }
-let meterAt = 0;
 function meterLoop(now) {
-  meterRaf = requestAnimationFrame(meterLoop);
-  if (now - meterAt < 33) return;   // about 30 updates a second is plenty and keeps the page's main thread free for audio
-  meterAt = now;
+  meterRaf = requestAnimationFrame(meterLoop);   // once per screen refresh: 120 times a second on a 120 Hz display
   for (const x of meters.values()) { if (x.m.el.hidden || !engine.ctx) continue; const lv = x.get(); x.m.update(lv.rms, lv.peak, now); }
 }
 function addMeter(key, get) { const m = makeMeter(); meters.set(key, { m, get }); return m; }
@@ -489,6 +486,7 @@ function stopPublish(fromServer) {
 // ----- floating "who is talking" window (Picture-in-Picture) -----
 // A small always-on-top window, like a video, so you can use other apps and still see who is speaking. A phone cannot
 // float arbitrary buttons, only video, so the status is drawn on a canvas and shown as a video.
+const PIP_MS = 8;   // floating-window redraw interval: about 120 a second
 const pip = { video: null, canvas: null, g: null, track: null, on: false, timer: 0, disp: -90, peak: -90, peakAt: 0, last: 0 };
 function pipSupported() {
   return !!HTMLCanvasElement.prototype.captureStream && !!(document.pictureInPictureEnabled || HTMLVideoElement.prototype.webkitSetPresentationMode);
@@ -543,7 +541,7 @@ function pipDraw(force) {
 // While the window is open the level meter needs a steady redraw (the rest of the picture only changes on events).
 function pipOn(on) {
   pip.on = on; clearInterval(pip.timer); pip.timer = 0;
-  if (on) { pipDraw(); pip.timer = setInterval(() => pipDraw(), 100); }
+  if (on) { pipDraw(); pip.timer = setInterval(() => pipDraw(), PIP_MS); }
 }
 async function pipToggle() {
   try {
@@ -552,7 +550,7 @@ async function pipToggle() {
     if (!pipSupported()) return toast('A floating window is not supported by this browser.');
     if (!pip.video) {
       pipDraw(true);
-      const stream = pip.canvas.captureStream(5);
+      const stream = pip.canvas.captureStream(120);
       pip.track = stream.getVideoTracks()[0];
       const v = pip.video = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = stream;

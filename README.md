@@ -21,7 +21,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
-- A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter. A phone can only float video, so the status is drawn as a picture and updates only when something changes
+- A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter, all redrawn up to 120 times a second. A phone can only float video, so the status is drawn as a picture and updates only when something changes
 - Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold
 - Recovers by itself when you come back to the app: reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
 - Plays on the phone's normal media volume, so there is one volume slider, not a separate "call" volume
