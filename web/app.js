@@ -34,7 +34,7 @@ if (!prefs.ver || prefs.ver < 2) { prefs.joined = []; prefs.left = []; prefs.see
 if (!prefs.ver || prefs.ver < 3) prefs.wake = true;                                                              // v3: keep screen on is the default
 prefs.ver = 3;
 // Volume sliders top out at 100% (normal level, no boost). Cap anything saved from the old 150%/200% range.
-prefs.master = Math.min(1, prefs.master); prefs.micGain = Math.min(1, prefs.micGain);
+prefs.master = Math.min(1, prefs.master); prefs.micGain = Math.min(1.25, prefs.micGain);
 for (const m of [prefs.roomVol, prefs.feedVol]) for (const k of Object.keys(m)) m[k] = Math.min(1, m[k]);
 export const savePrefs = () => { try { localStorage.setItem('ns.prefs', JSON.stringify(prefs)); } catch {} };
 
@@ -83,8 +83,9 @@ async function appView() {
   ui.dot = h('span', { class: 'dot' });
   ui.rooms = h('div'); ui.feeds = h('div'); ui.warn = h('div');
   ui.audio = h('div', { class: 'warn', hidden: true, style: 'cursor:pointer;font-weight:600', onclick: () => enableAudio() }, '🔇 Audio is off: tap here to start listening');
-  ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);
-  const mv = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; savePrefs(); voice?.setGain(prefs.micGain); } });
+  ui.mic = h('b'); ui.micRow = h('div', { class: 'meter' }, ui.mic);   // ui.mic is the mask over the unlit part of the bar
+  const micPct = h('span', {}, Math.round(prefs.micGain * 100) + '%');
+  const mv = h('input', { type: 'range', min: 0, max: 1.25, step: 0.01, value: prefs.micGain, oninput: (e) => { prefs.micGain = +e.target.value; micPct.textContent = Math.round(prefs.micGain * 100) + '%'; savePrefs(); voice?.setGain(prefs.micGain); } });
   const lv = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.master, oninput: (e) => { prefs.master = +e.target.value; savePrefs(); engine.setMaster(prefs.master); } });
   engine.vol.master = prefs.master;
   root.replaceChildren(
@@ -95,7 +96,7 @@ async function appView() {
     h('div', { class: 'wrap' }, ui.warn, ui.audio, h('h2', {}, 'Rooms'), ui.rooms, h('h2', {}, 'Program feeds'), ui.feeds),
     h('div', { class: 'bar' }, h('div', { class: 'in' },
       h('div', {}, h('label', {}, h('span', {}, 'Listening volume')), lv),
-      h('div', {}, h('label', {}, h('span', {}, 'Microphone volume')), mv, ui.micRow))));
+      h('div', {}, h('label', {}, h('span', {}, 'Microphone volume'), micPct), mv, ui.micRow))));
   if (!supported) ui.warn.append(h('div', { class: 'warn' }, 'This browser lacks WebCodecs audio. Use a current Chrome, Edge, Firefox or Safari 26+.'));
   if (!window.isSecureContext) ui.warn.append(h('div', { class: 'warn' }, 'Microphone needs HTTPS. Open this page over https://.'));
   connect();
@@ -304,7 +305,7 @@ function micOpts() {
     ec: false, ns: true, agc: false, hpf: 80, gate: false, feedback: true, aec: true,
     onAec: (db) => { S.aecDb = db; },
     onFeedback: (f) => { S.fb = f; if (Date.now() - lastFbToast > 20000) { lastFbToast = Date.now(); toast('Feedback detected and suppressed. Earbuds, or moving devices apart, will stop it for good.'); } },
-    onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; vadFrame(l); },
+    onLevel: (l) => { setMeter(l); vadFrame(l); },
     onFrame: (seq, d) => {
       if (!ws || ws.readyState !== 1) return;
       for (const id of S.talking) {
@@ -329,7 +330,15 @@ function ensureMic() {
   }
   return micPromise;
 }
-async function closeMic() { if (voice) { const v = voice; voice = null; await engine.stopCapture('voice'); if (ui.mic) ui.mic.style.width = 0; } }
+async function closeMic() { if (voice) { const v = voice; voice = null; await engine.stopCapture('voice'); setMeter(0); } }
+// Level meter in dB: -60 dBFS at the left edge to 0 dBFS at the right. The colour bands are fixed on the bar
+// (green, yellow from -24 dB, orange from -15 dB, red from -6 dB); the level only decides how much is lit.
+function setMeter(l) {
+  if (!ui.mic) return;
+  const db = 20 * Math.log10(Math.max(Number.isFinite(l) ? l : 0, 1e-5));
+  ui.mic.style.width = (100 - Math.max(0, Math.min(100, ((db + 60) / 60) * 100))) + '%';
+}
+
 // Voice detection, run on every 20 ms mic frame: tells the room who is actually speaking (as opposed to
 // merely having talk switched on). The noise floor is tracked so quiet rooms and noisy rooms both work.
 const vad = { floor: 0.01, on: false, run: 0, quiet: 0 };
@@ -416,7 +425,7 @@ async function startPublish(f, deviceId) {
     send({ t: 'publish', feed: f.id, on: true });
     const ch = f.ch;
     const cap = await engine.capture('feed', { channels: 2, bitrate: 192000, application: 'audio', deviceId, gain: prefs.feedGain, ec: false, ns: false, agc: false, hpf: 0, gate: false, compressor: true,
-      onLevel: (l) => { if (ui.mic) ui.mic.style.width = Math.min(100, Math.sqrt(l) * 160) + '%'; },
+      onLevel: (l) => setMeter(l),
       onFrame: (seq, d) => { if (!ws || ws.readyState !== 1) return; const m = new Uint8Array(7 + d.length), dv = new DataView(m.buffer); dv.setUint8(0, 1); dv.setUint16(1, ch); dv.setUint32(3, seq); m.set(d, 7); ws.send(m); } });
     cap.sending = true; S.publishing = f.id; update();
   } catch (e) { send({ t: 'publish', feed: f.id, on: false }); toast('Could not start: ' + e.message); }
@@ -524,5 +533,5 @@ function pocketLock() {
   document.body.append(o);
 }
 
-window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms) };
+window.netspeak = { engine, S, prefs, recover: (ms) => recover(ms), setMeter };
 boot();

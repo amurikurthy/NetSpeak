@@ -1,19 +1,47 @@
 # NetSpeak
 
-Self-hosted intercom with clean program feeds. One container, one port (**443**), no database.
+A self-hosted intercom for crews, venues and events, with synchronised program audio. One small container, one port, no database, no accounts with anyone else: you run it, you own it.
 
-- **Rooms** with per-room push-to-talk or latch, live "who's talking", per-room volume
-- **Synchronised program feed**: the server stamps every program packet with its clock, each device measures its offset from that clock, and everyone plays each packet at stamp + a fixed delay (250 ms by default), so all listeners hear the same sound at the same moment. Rooms are not delayed
-- **Program feeds**: stereo Opus at 192 kbps with a compressor and limiter at the sending end, so levels stay even and never clip. Listeners just get a volume slider
-- **Permissions**: users created by the admin, assigned straight to rooms and feeds with *listen / talk / send*. Changes apply instantly to connected clients
-- **Phone friendly PWA**: installable, keeps playing with the screen off, reconnects on its own
-- **Feedback protection**: an automatic suppressor finds howling tones on your mic and cuts just that frequency, so you can still hear everyone while you talk (and talk over each other). Earbuds remain the real cure for two devices in one room
-- **Voice mic processing**: noise suppression with a gentle low-cut, a built-in software echo canceller that learns from what the device is playing, and automatic feedback suppression. The browser's own echo cancellation is off because it forces Android into phone-call audio mode (a separate call volume). Earbuds or a headset are still the best protection. No auto gain, no gate. Program feeds bypass all of it
-- **Single port**: web app, API and audio all ride one connection (WebSocket). Nothing else to forward, works behind reverse proxies and tunnels
+People talk to each other in **rooms** from any phone or computer. Everyone can also listen to a **program feed** (the show audio, a mix, a stream) that plays in sync on every device. The admin decides, person by person, who can hear and talk where.
+
+## Highlights
+
+**Talking**
+- Rooms with tap-to-latch or hold-to-talk. Tap the button once and you stay live until you tap again; hold it for push-to-talk. A room can be set to push-to-talk only
+- Talking always goes to one room: starting in a second room moves you there
+- See who is in each room, and who is actually speaking right now. Speakers jump to the front of the list and light up
+- Join several rooms at once and hear them mixed, with a volume slider per room
+- Headset or earbud button toggles your mic in the active room
+
+**Program feeds**
+- One-way stereo audio, Opus at 192 kbps, sent from a browser (line-in or audio interface) or pushed from ffmpeg, OBS or anything that can make an Ogg/Opus stream
+- Compressor and limiter at the sending end keep the level even and stop peaks clipping
+- **Synchronised playback.** The server stamps every packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (250 ms by default). Every listener hears the same sound at the same moment, whatever their network or sound card
+
+**Made for phones**
+- Installable web app (PWA). Keeps playing with the screen off
+- Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold
+- Recovers by itself when you come back to the app: reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
+- Plays on the phone's normal media volume, so there is one volume slider, not a separate "call" volume
+
+**Clean microphone**
+- Noise suppression with a gentle low-cut
+- A **built-in echo canceller** that learns from what the device is playing and removes it from the mic, in software, so the phone never has to switch into call mode
+- An **automatic feedback suppressor** that finds a howling tone on the mic and cuts just that frequency. Nobody is muted, so you can hear others while you talk, and talk over each other
+- Mic volume from 0 to 125%, and a level meter that goes green, yellow, orange and red
+- Earbuds or a headset are still the best protection against feedback
+
+**Access control**
+- The admin creates a user for each person and ticks which rooms and feeds they can listen to, talk in, or send to. A room can also be open to everyone
+- Changes apply instantly to people who are connected. Users can be disabled or kicked
+
+**Simple to run**
+- One Go binary in a tiny container (amd64 and arm64). State is one JSON file on a volume
+- Web app, API and all audio travel over a single connection, so one port is all you forward
 
 ## Deploy
 
-Needs a Linux machine with Docker. Save this as `docker-compose.yml` and run `docker compose up -d`:
+You need a machine with Docker. Save this as `docker-compose.yml` and start it:
 
 ```yaml
 services:
@@ -22,7 +50,7 @@ services:
     container_name: netspeak
     restart: unless-stopped
     ports:
-      - "443:443"                     # HTTPS with a self-signed cert; your reverse proxy terminates the real one
+      - "443:443"                     # HTTPS with a self-signed cert; your reverse proxy presents the real one
     volumes:
       - ./data:/data                  # users, rooms, keys: back this folder up
     environment:
@@ -31,16 +59,18 @@ services:
 
 ```bash
 docker compose up -d
-docker compose logs netspeak    # first-start admin password
+docker compose logs netspeak          # shows the first-start admin password
 ```
 
-Open the site through your reverse proxy, sign in as `admin`, and change the password under Settings. The image is built for amd64 and arm64 (Raspberry Pi works) by GitHub Actions on every push to `main`.
+Open the site through your reverse proxy, sign in as `admin`, and change the password in Settings. A fresh install has three starter rooms and a Program feed, open to every user, so new accounts work immediately.
 
-**Update:** `docker compose pull && docker compose up -d` (your data in `./data` is kept).
+**Update:** `docker compose pull && docker compose up -d`. Your data in `./data` is kept.
+
+The image is built for amd64 and arm64 (a Raspberry Pi works) by GitHub Actions on every push to `main`.
 
 ### Reverse proxy
 
-NetSpeak serves HTTPS on 443 with a self-signed certificate and expects your reverse proxy to present the real one. The proxy must **pass WebSockets** (audio uses `/ws`) and **keep the original Host header** (the WebSocket origin check compares it). Browsers need HTTPS for the microphone, so the proxy's certificate is what users see.
+NetSpeak serves HTTPS on 443 with a self-signed certificate and expects your reverse proxy to present the real one. Browsers only allow the microphone on trusted HTTPS, so the proxy's certificate is what people see. The proxy must **pass WebSockets** (audio uses `/ws`) and **keep the original Host header** (the WebSocket origin check compares it).
 
 Caddy:
 
@@ -69,45 +99,80 @@ location / {
 
 Traefik: add the service with `scheme: https` and a `serversTransport` with `insecureSkipVerify: true`.
 
-**Behind a login (Pangolin, Authelia, Cloudflare Access, basic auth).** The app is installable as long as the proxy lets three things through: `/manifest.webmanifest`, `/sw.js` and `/icons/`. The page asks the browser to send your login cookie with the manifest request (`crossorigin="use-credentials"`), which is enough for most setups. If installing still fails, add a rule that skips authentication for those paths (in Pangolin: a resource rule allowing them).
+To skip the self-signed hop, set `NETSPEAK_TLS: "off"`. The container then speaks plain HTTP on 8080: map `8080:8080` and proxy to `http://netspeak:8080`.
 
-To skip the self-signed hop, set `NETSPEAK_TLS: "off"` and the container speaks plain HTTP on 8080 (map `8080:8080` and proxy to `http://netspeak:8080`). Opening the container directly without a proxy also works: you get a browser warning once.
+**Behind a login (Pangolin, Authelia, Cloudflare Access, basic auth).** The app can be installed as long as the proxy lets three things through: `/manifest.webmanifest`, `/sw.js` and `/icons/`. The page asks the browser to send your login cookie with the manifest request, which is enough for most setups. If installing still fails, add a rule that skips authentication for those paths (in Pangolin, a resource rule that allows them).
 
-### Environment
+### Settings
+
+All settings go in the `environment:` section of the compose file.
 
 | Variable | Default | |
 |---|---|---|
+| `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password (first start only) |
+| `NETSPEAK_FEED_DELAY_MS` | 250 | the fixed delay every listener adds to program audio so all devices stay in sync. It must be longer than your slowest listener's network delay (50 to 2000) |
 | `NETSPEAK_TLS` | selfsigned | `selfsigned` (HTTPS on 443) or `off` (plain HTTP on 8080) |
-| `NETSPEAK_PORT` | 443 (8080 if TLS off) | listen port |
-| `NETSPEAK_ADMIN_PASSWORD` | random, logged | initial admin password |
-| `NETSPEAK_FEED_DELAY_MS` | 250 | fixed delay every listener adds to program audio so all devices stay in sync. Must exceed your slowest listener's network delay (50 to 2000) |
-| `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy; set `0` if exposed directly |
-| `NETSPEAK_DATA` | /data | state directory (one JSON file + certs). Back up this folder |
+| `NETSPEAK_PORT` | 443 (8080 if TLS is off) | listen port |
+| `NETSPEAK_TRUST_PROXY` | 1 | trust `X-Forwarded-For` from your proxy. Set `0` if the container is exposed directly |
+| `NETSPEAK_DATA` | /data | state directory: one JSON file plus certificates |
 
 ## Using it
 
-**Admin → Users/Rooms/Feeds.** The admin creates a user account for each person and ticks which rooms and feeds they can listen to, talk in or send to (or sets a room to "Everyone"). Admins can access everything.
+**Admin.** Admins get an Admin button with three tabs.
+- *Users*: create people, set their name and password, tick what they can reach (listen, talk; send for feeds), disable or kick them
+- *Rooms*: name, colour and order; push-to-talk only; who can listen and talk. "Everyone" opens a room to all users
+- *Feeds*: who can listen and who can send, plus each feed's ingest key and ready-made ffmpeg commands
 
-**Program audio.** Either open a feed on a device with a line-in/interface and choose *Send from this device* (echo cancel, noise suppression and AGC are off; a compressor and limiter even out the level, and a send-level slider sets how hot it goes out), or push from anything ffmpeg can read. The server relays Opus packets as-is and never re-encodes them, so any compressing happens at the sender; the ffmpeg line below does it with `-af`:
+**Talking.** Join a room with its switch. Tap the big button to latch your mic on, tap again to stop, or hold it for push-to-talk. Your microphone stays open while the app is open, which avoids the glitches phones make when a mic opens and closes, but nothing is sent until you talk.
+
+**Listening.** On a first visit you join one room. After that the app remembers which rooms you switched on, and starts the program feed by itself. Each room and feed has its own volume.
+
+**Sending program audio.** Either open a feed on a device with a line-in or audio interface and press *Send from this device* (echo cancellation, noise suppression and auto gain are all off; a compressor and limiter even out the level, and a send-level slider sets how hot it goes out), or push from anything that makes Ogg/Opus. The server relays the Opus packets untouched and never re-encodes them, so compression has to happen at the source. This ffmpeg line does it:
 
 ```bash
-ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=250,alimiter=limit=0.8" -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - \
+ffmpeg -re -i INPUT -af "acompressor=threshold=0.063:ratio=3:attack=10:release=250,alimiter=limit=0.8" \
+  -c:a libopus -b:a 192k -frame_duration 20 -ac 2 -ar 48000 -f ogg - \
   | curl -sS -T - https://HOST/ingest/FEED_KEY
 ```
 
-(The key is shown in Admin → Feeds → Ingest.) Use 20 ms frames. Opus is lossy, but at 192 kbps it is transparent for monitoring; it is not bit-exact PCM.
+The key is shown in Admin, Feeds, Ingest. Use 20 ms frames. Opus is lossy, but at 192 kbps it is transparent for monitoring. It is not bit-exact PCM.
 
-## Browser support and the screen-off caveat
+**Settings** (in the app): your name, microphone and speaker choice, keep screen on, Diagnostics, change password, reload, sign out. Diagnostics shows the connection, the sound engine, the microphone, packets sent and received, the echo canceller, the feedback suppressor and the program-feed clock sync, which is the first place to look when something sounds wrong.
 
-Audio uses WebCodecs Opus: Chrome/Edge 94+, Firefox 130+, Safari 26+. Listening continues with the screen off because output goes through a media element with a Media Session. **Talking** with the screen off works on Android Chrome (installed PWA); iOS suspends microphone capture when the app is backgrounded, which no web app can override, so on iPhones keep the screen on (Settings → Keep screen on).
+## How it works
 
-## Security notes
+- **Transport.** Everything rides one WebSocket over HTTPS: control messages as JSON, audio as binary Opus packets. The server only relays. It never decodes or mixes audio, and checks every packet against the sender's current permissions
+- **Codec.** The browser encodes and decodes Opus with WebCodecs. Voice is mono at 32 kbps, program audio is stereo at 192 kbps
+- **Synchronised feed.** The server keeps a media clock per feed that follows the source's pace without steps. Each device estimates its offset from the server clock with repeated ping/pong exchanges, schedules every packet on its own audio clock, and nudges playback by a few samples to track drift. A packet that arrives after its play time is skipped rather than played out of sync
+- **Echo, noise and feedback.** The microphone passes through an AudioWorklet that runs a 16 kHz frequency-domain echo canceller (using what the device is playing as the reference), a double-talk protection that stops it learning while you speak, and a feedback suppressor that places narrow notch filters on howling tones
+- **State.** Users, rooms, feeds and access live in one JSON file in `/data`, written atomically. There is no database and no other service
 
-Passwords are bcrypt-hashed, sessions are signed HttpOnly cookies, logins are rate limited, WebSocket origin is checked, and every audio frame is checked against the sender's current permissions on the server. Audio is encrypted in transit by TLS but not end-to-end: the server can hear rooms. The ingest key grants publish rights to its feed: treat it like a password.
+## Browser support and phone notes
 
-## Develop
+Audio uses WebCodecs Opus: Chrome and Edge 94+, Firefox 130+, Safari 26+.
+
+- **Android (Chrome):** listening continues with the screen off. Talking often does too when the app is installed, but it varies by phone and battery settings, which is why Keep screen on and Pocket lock exist
+- **iPhone:** iOS stops microphone capture when a web app goes to the background, and no web app can override that. Use the default Keep screen on and Pocket lock, and keep the app in front. Listening continues in the background
+- **Install:** use the browser's own menu (Install app, or Add to Home Screen). Installing needs trusted HTTPS
+- **Feedback:** if two devices are in one room, earbuds or a headset are the real fix
+
+## Security
+
+Passwords are bcrypt-hashed. Sessions are signed HttpOnly cookies, logins are rate limited, and the WebSocket origin is checked. Audio is encrypted in transit by TLS but not end to end: the server relays it and could listen. A feed's ingest key lets anyone who has it publish to that feed, so treat it like a password. Admins can rotate it.
+
+## Development
 
 ```bash
-go run .    # set NETSPEAK_DATA=./data NETSPEAK_PORT=8443
+NETSPEAK_DATA=./data NETSPEAK_PORT=8443 go run .
 ```
-No build step for the frontend (plain ES modules in `web/`), embedded into the binary.
+
+The frontend is plain ES modules in `web/`, embedded into the binary: there is no build step.
+
+```bash
+go test ./...                    # permissions, stamp clock, ordering
+node test/feedback.test.js       # feedback suppressor, in a simulated howling loop
+node test/syncplay.test.mjs      # synchronised playout across devices with different networks and clocks
+node test/aec.test.js            # echo canceller, with real synthesised speech (needs ffmpeg with flite; skips if missing)
+```
+
+CI runs all of these and publishes the image on every push to `main`.

@@ -33,7 +33,7 @@ h1,h2,h3{margin:0}h2{font-size:13px;letter-spacing:.08em;text-transform:uppercas
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:10px 14px calc(var(--sab) + 10px);z-index:6}
 .bar .in{max-width:760px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:6px 18px}
 .bar label{font-size:12px;color:var(--dim);display:flex;justify-content:space-between}
-.meter{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden}.meter b{display:block;height:100%;width:0;background:var(--accent);transition:width .06s}
+.meter{position:relative;height:8px;border-radius:4px;overflow:hidden;background:linear-gradient(to right,#22c55e 0 60%,#eab308 60% 75%,#f97316 75% 90%,#ef4444 90% 100%)}.meter b{position:absolute;top:0;right:0;bottom:0;width:100%;background:var(--panel2);transition:width .06s}
 .sheet{position:fixed;inset:0;background:#000a;z-index:20;display:flex;align-items:flex-end;justify-content:center}
 .sheet>div{background:var(--panel);width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:18px 16px calc(var(--sab) + 18px);border:1px solid var(--line)}
 @media(min-width:700px){.sheet{align-items:center}.sheet>div{border-radius:18px}}
