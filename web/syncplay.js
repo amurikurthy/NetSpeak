@@ -52,7 +52,7 @@ export class SyncPlayout {
     // it shrinks again slowly once chunks arrive comfortably early.
     this.extra = 0;
     this.lastDry = -1e9;         // audio-clock time of the last time the queue ran dry
-    this.stats = { drops: 0, reanchors: 0, corrections: 0, dry: 0, dryMaxMs: 0 };
+    this.stats = { drops: 0, reanchors: 0, corrections: 0, dry: 0, dryMaxMs: 0, catchUps: 0 };
   }
 
   _anchor(desired0, now, n) {
@@ -92,10 +92,13 @@ export class SyncPlayout {
       if (late > 1.0) { this.stats.drops++; this.next = null; return { drop: true, when, slip: 0 }; }
       this.extra = Math.min(1.0, this.extra + late + 0.02);
       when = now + 0.02;
-    } else if (this.extra > 0 && now - this.lastDry > 5 && when - now > 0.05) {
-      // Quiet for a while: hand the cushion back, so this device catches up with the others instead of staying behind.
-      // The steering above turns the shrinking cushion into slightly faster playback (about 0.7%), which nobody hears.
-      this.extra = Math.max(0, this.extra - 0.00015);
+    } else if (this.extra > 0 && now - this.lastDry > 0.5 && when - now > 0.05) {
+      // Quiet for half a second: hand the extra cushion back, so this device catches up with the others instead of staying
+      // behind. It does this by playing 5% faster until the gap is closed (a gap of 100 ms takes 2 s). A constant speed
+      // finishes on schedule, and 5% is a brief, mild speed-up rather than a speeded-up tape.
+      const rate = 0.05;
+      const catchUp = Math.min(this.extra, rate * n / this.sr);
+      this.extra -= catchUp; slip -= Math.round(catchUp * this.sr); this.stats.catchUps++;
     }
     this.next = when + (n + slip) / this.sr;
     return { when, slip, drop: false };

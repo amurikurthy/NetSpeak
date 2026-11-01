@@ -102,6 +102,26 @@ assert(lagAfterStalls > 0, 'the scenario must actually make it fall behind');
 assert(devs5[1].pl.extra < 0.002, 'extra delay must be handed back after things are quiet');
 assert(tail(devs5) <= e5 + 2.0, 'and it must be back in step with the other device');
 
+// How long after a blip does a device get back in step? One 460 ms network stall (its audio arrives in a burst), then clean.
+{
+  const pl = new SyncPlayout(SR), dt = N / SR; let blipEnd = null, recovered = null, maxSpeedup = 0, dry = 0;
+  for (let i = 0; i < 1500; i++) {
+    const due = 5 + i * dt + D / 1000;                          // when this chunk should sound (audio clock, seconds)
+    const sent = 5 + i * dt;
+    const stalled = i >= 500 && i < 523;                        // chunks 500..522 are held up, then arrive together
+    const arrive = stalled ? 5 + 500 * dt + 0.46 : sent + 0.02;
+    const r = pl.plan(due, arrive, N);
+    if (r.slip < 0) maxSpeedup = Math.max(maxSpeedup, -r.slip / N);
+    if (i === 523) blipEnd = arrive;
+    if (blipEnd !== null && recovered === null && pl.extra < 0.001) recovered = arrive - blipEnd;
+  }
+  dry = pl.stats.dry;
+  console.log(`8. recovery from a 460 ms blip: ran dry ${dry}x, extra delay gone ${recovered === null ? 'never' : recovered.toFixed(1) + ' s'} after the blip, fastest playback +${(maxSpeedup * 100).toFixed(1)}%`);
+  assert(dry > 0, 'the blip must actually run the buffer dry');
+  assert(recovered !== null && recovered < 3.5, 'recovery must take about two to three seconds');
+  assert(maxSpeedup < 0.055, 'catching up may not sound like a speeded-up tape');
+}
+
 // ---- 3. interpolation quality ---------------------------------------------------------------------------
 const err = (f, m) => { const x = Float32Array.from({ length: N }, (_, i) => Math.sin(2 * Math.PI * f * i / SR)); const y = stretch(x, m); let e = 0, s = (N - 1) / (m - 1);
   for (let j = 4; j < m - 4; j++) e = Math.max(e, Math.abs(y[j] - Math.sin(2 * Math.PI * f * j * s / SR))); return e; };

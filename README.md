@@ -17,7 +17,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 **Program feeds**
 - One-way stereo audio, Opus at 192 kbps, sent from a browser (line-in or audio interface) or pushed from ffmpeg, OBS or anything that can make an Ogg/Opus stream
 - Compressor and limiter at the sending end keep the level even and stop peaks clipping
-- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (350 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth. Once its network has been steady for a few seconds it hands that cushion back by playing a fraction of a percent faster, so it catches up with the other devices
+- **Synchronised playback.** The server stamps every program packet with its own clock, every device measures how far its clock is from the server's, and each device plays each packet a fixed time after its stamp (350 ms by default). Everyone hears the same sound at the same moment, and delay cannot build up. A device on a slow network gets a small extra cushion of its own, so its audio stays smooth. after half a second of steady audio it hands that cushion back by playing 5% faster until it has caught up with the other devices (a 100 ms gap takes about 2 seconds)
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
