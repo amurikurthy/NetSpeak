@@ -317,6 +317,8 @@ async function closeMic() { if (voice) { const v = voice; voice = null; await en
 // merely having talk switched on). The noise floor is tracked so quiet rooms and noisy rooms both work.
 const vad = { floor: 0.01, on: false, run: 0, quiet: 0 };
 function vadFrame(l) {
+  if (!Number.isFinite(l)) return;                                  // never let a bad reading poison the noise-floor tracking
+  if (!Number.isFinite(vad.floor)) vad.floor = 0.01;
   vad.floor = l < vad.floor ? l : vad.floor + (l - vad.floor) * 0.0002;
   if (l > Math.max(0.006, vad.floor * 4)) { vad.quiet = 0; if (!vad.on && ++vad.run >= 2) setSpeaking(true); }
   else { vad.run = 0; if (vad.on && ++vad.quiet >= 15) setSpeaking(false); }   // 300 ms hangover

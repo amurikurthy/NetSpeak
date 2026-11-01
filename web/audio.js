@@ -269,7 +269,7 @@ class Capture {
       const { frame, level, feedback, aec } = m.data;
       if (feedback) o.onFeedback(feedback);
       if (aec !== undefined) o.onAec(aec);
-      o.onLevel(level);
+      if (typeof level === 'number') o.onLevel(level);   // status messages (feedback, echo) carry no level
       if (!frame || !this.sending) return;
       if (this.enc.encodeQueueSize > 10) return;
       const ad = new AudioData({ format: 'f32-planar', sampleRate: 48000, numberOfFrames: 960,
