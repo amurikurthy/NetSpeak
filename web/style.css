@@ -4,7 +4,7 @@
 html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overscroll-behavior:none}
 button,input,select{font:inherit;color:inherit}
 button{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 14px;cursor:pointer}
-button:hover{border-color:#44506b}button.primary{background:var(--accent);color:#052e12;border-color:var(--accent);font-weight:600}
+@media (hover:hover){button:hover{border-color:#44506b}}   /* phones keep a tapped button "hovered" until the next tap, so only real pointers get this */button.primary{background:var(--accent);color:#052e12;border-color:var(--accent);font-weight:600}
 button.danger{color:var(--danger)}button:disabled{opacity:.45;cursor:default}
 button.ghost{background:transparent;border-color:transparent}
 input[type=text],input[type=password],input[type=number],select{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 12px;width:100%}
@@ -62,3 +62,7 @@ code,pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;pad
 .talk-btn .meter{position:absolute;left:12px;right:12px;bottom:6px;margin:0;height:5px;border-radius:3px;pointer-events:none}
 .card.min .talk-btn{height:58px;padding:6px 12px 15px;font-size:16px;line-height:1.15}
 .card.min .talk-btn small{font-size:11px}
+
+/* The talk button's outline is always the room's colour, whatever state a phone leaves the button in (hover, focus, pressed). */
+.talk-btn,.talk-btn:hover,.talk-btn:focus,.talk-btn:active{border-color:color-mix(in srgb,var(--c) 70%,#fff 0%)}
+.talk-btn{-webkit-tap-highlight-color:transparent;outline:none}
