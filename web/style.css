@@ -47,3 +47,18 @@ table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 6px;
 code,pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:2px 6px;font-size:12.5px;word-break:break-all}pre{padding:10px;white-space:pre-wrap}
 .warn{background:#3b2f10;border:1px solid #6b5313;color:var(--warn);border-radius:10px;padding:10px 12px;margin:10px 0}
 .pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;background:var(--panel2);margin:1px 2px 1px 0;border:1px solid var(--line)}
+
+[hidden]{display:none!important}
+.chev{flex:none;width:34px;height:30px;padding:0;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--dim);font-size:15px;line-height:1}
+.chev:hover{color:var(--fg,#e8ecf4)}
+.phead{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.phead .chev{width:28px;height:24px;font-size:13px}
+.fold>.chips{margin-top:6px}
+.sub.hot{color:var(--accent);font-weight:600}
+.card.min{padding-bottom:12px}
+
+
+.talk-btn{position:relative}
+.talk-btn .meter{position:absolute;left:12px;right:12px;bottom:6px;margin:0;height:5px;border-radius:3px;pointer-events:none}
+.card.min .talk-btn{height:58px;padding:6px 12px 15px;font-size:16px;line-height:1.15}
+.card.min .talk-btn small{font-size:11px}

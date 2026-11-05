@@ -33,6 +33,8 @@ export const prefs = (() => { try { return { ...defaults, ...JSON.parse(localSto
 if (!prefs.ver || prefs.ver < 2) { prefs.joined = []; prefs.left = []; prefs.seeded = false; delete prefs.autoJoin; }   // v2: rooms are not all auto-joined
 if (!prefs.ver || prefs.ver < 3) prefs.wake = true;                                                              // v3: keep screen on is the default
 prefs.ver = 3;
+prefs.fold = prefs.fold || {};            // card key -> true when that card is minimised
+prefs.peopleHidden = prefs.peopleHidden || {};   // room id -> true when its participant list is hidden
 // Volume sliders top out at 100% (normal level, no boost). Cap anything saved from the old 150%/200% range.
 prefs.master = Math.min(1, prefs.master); prefs.micGain = Math.min(1.25, prefs.micGain);
 for (const m of [prefs.roomVol, prefs.feedVol]) for (const k of Object.keys(m)) m[k] = Math.min(1, m[k]);
@@ -239,7 +241,7 @@ function scheduleTail() {
   for (const [k, t] of heard) { if (now - t >= TAIL_MS) heard.delete(k); else next = Math.min(next, t + TAIL_MS); }
   if (next < Infinity) tailTimer = setTimeout(() => { update(); scheduleTail(); }, next - now + 30);   // redraw when the next highlight runs out
 }
-function update() { for (const c of cards.values()) c(); audioBanner(); pip.baseOk = false; pipDraw(); }
+function update() { for (const c of cards.values()) c(); audioBanner(); pip.baseOk = false; pipDraw(); try { navigator.mediaSession.setMicrophoneActive?.(S.talking.size > 0); } catch {} }
 
 // Browsers only start audio after a tap/click. Rooms remembered from a previous visit are re-joined
 // automatically, so without this the room looks joined while nothing is actually playing.
@@ -263,6 +265,14 @@ setInterval(audioBanner, 1000);
 function persist() { prefs.joined = [...S.joined]; prefs.listening = [...S.listening]; savePrefs(); }
 
 // ----- rooms -----
+// A small chevron button that minimises or restores a panel (or part of one).
+function chevron(isFolded, toggle, labels) {
+  const b = h('button', { class: 'chev', type: 'button', onclick: (e) => { e.stopPropagation(); toggle(); sync(); update(); } });
+  const sync = () => { const f = isFolded(); b.textContent = f ? '▾' : '▴'; b.title = b.ariaLabel = f ? labels[0] : labels[1]; b.setAttribute('aria-expanded', f ? 'false' : 'true'); };
+  sync(); b._sync = sync; return b;
+}
+const setFold = (obj, key, on) => { if (on) obj[key] = true; else delete obj[key]; savePrefs(); };
+
 function roomCard(r) {
   const chips = h('div', { class: 'chips' });
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
@@ -272,18 +282,32 @@ function roomCard(r) {
     else { if (!prefs.left.includes(r.id)) prefs.left.push(r.id); if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); engine.stopChannel('room', r.id); }
     persist(); update();
   } });
-  const btn = r.talk ? talkButton(r) : null;
+  // Folded, the talk button gets smaller and carries its own meter: your voice while you are live, otherwise the room.
+  const bm = r.talk ? addMeter('b' + r.id, () => S.talking.has(r.id) ? { rms: micDb, peak: micDb } : engine.level('room', r.id)) : null;
+  const btn = r.talk ? talkButton(r, bm.el) : null;
   const mt = addMeter('r' + r.id, () => engine.level('room', r.id));
+  const key = 'r' + r.id, folded = () => !!prefs.fold[key], peopleOff = () => !!prefs.peopleHidden[r.id];
+  const subTxt = h('div', { class: 'sub' }, r.talk ? 'Listen & talk' : 'Listen only');
+  const peopleBtn = chevron(peopleOff, () => setFold(prefs.peopleHidden, r.id, !peopleOff()), ['Show participants', 'Hide participants']);
+  const peopleHead = h('div', { class: 'phead' }, h('span', {}, 'Participants'), peopleBtn);
+  const details = h('div', { class: 'fold' }, peopleHead, chips, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Room volume'), vol, mt.el);
+  const chev = chevron(folded, () => setFold(prefs.fold, key, !folded()), ['Show details', 'Minimise']);
   const el = h('section', { class: 'card room', style: `--c:${r.color}` },
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), h('div', { class: 'sub' }, r.talk ? 'Listen & talk' : 'Listen only')),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), subTxt), chev,
       h('label', { class: 'sw' }, sw, h('i'))),
-    chips, h('div', { class: 'sub' }, 'Room volume'), vol, mt.el, btn);
+    details, btn);
   cards.set(r.id, () => {
-    const on = S.joined.has(r.id);
-    sw.checked = on; el.classList.toggle('joined', on); mt.el.hidden = !on;
+    const on = S.joined.has(r.id), min = folded();
+    sw.checked = on; el.classList.toggle('joined', on); el.classList.toggle('min', min);
+    details.hidden = min; chips.hidden = peopleOff(); mt.el.hidden = !on || min; if (bm) bm.el.hidden = !on || !min; peopleBtn._sync(); chev._sync();
     const ms = S.presence.rooms?.[r.id] || [];
     // Everyone in the room is listed, and whoever is speaking lit up, whether or not you have joined it yourself.
     chips.replaceChildren(...(ms.length ? ms.map((m) => [m, isHot(r.id, m)]).sort((a, b) => b[1] - a[1]).map(([m, hot]) => h('span', { class: 'chip' + (hot ? ' talk' : '') }, m.n + (m.c === S.c ? ' (you)' : ''))) : [h('span', { class: 'sub' }, 'Nobody here')]));
+    // Minimised, the list is hidden, so the subtitle says who is here and who is speaking.
+    const hot = ms.filter((m) => isHot(r.id, m)).map((m) => (m.c === S.c ? 'You' : m.n));
+    subTxt.textContent = min ? (hot.length ? '● ' + hot.join(', ') : (r.talk ? 'Listen & talk' : 'Listen only') + (ms.length ? ' · ' + ms.length + ' here' : '')) : (r.talk ? 'Listen & talk' : 'Listen only');
+    subTxt.classList.toggle('hot', min && hot.length > 0);
+    peopleHead.querySelector('span').textContent = 'Participants' + (ms.length ? ' (' + ms.length + ')' : '');
     if (btn) { btn.hidden = !on; btn.classList.toggle('on', S.talking.has(r.id)); btn._label(); }
   });
   if (S.joined.has(r.id)) setTimeout(() => applyRoom(r.id), 0);
@@ -294,13 +318,13 @@ function roomCard(r) {
 function applyRoom(id) { applyVol('room', id, prefs.roomVol[id] ?? 1); }
 function applyVol(kind, id, v) { if (engine.ctx) engine.setVolume(kind, id, v); }
 
-function talkButton(r) {
+function talkButton(r, meterEl) {
   const b = h('button', { class: 'talk-btn', oncontextmenu: (e) => e.preventDefault() });
   let downAt = 0;
   b._label = () => {
     const on = S.talking.has(r.id), latched = S.calls.has(r.id);
     b.replaceChildren(on ? 'TALKING' : (r.pttOnly ? 'HOLD TO TALK' : 'TAP OR HOLD TO TALK'),
-      h('small', {}, on ? (latched ? 'tap to stop' : 'release to stop') : (r.pttOnly ? 'push-to-talk only' : 'tap to latch · hold for push-to-talk')));
+      h('small', {}, on ? (latched ? 'tap to stop' : 'release to stop') : (r.pttOnly ? 'push-to-talk only' : 'tap to latch · hold for push-to-talk')), meterEl);
   };
   b.addEventListener('pointerdown', async (e) => {
     e.preventDefault(); b.setPointerCapture(e.pointerId);
@@ -323,6 +347,13 @@ function toggleCall(id) {
   S.calls.add(id); S.active = id; talkStart(id);
 }
 // Earbud / headset button: toggles latched talk in the active room.
+// Pause or play from an earbud or from the floating window means one thing: flip the mic. A phone may report one press
+// as the media-session action, as the floating video pausing itself, or both, so repeats within a moment count once.
+let micToggleAt = 0;
+function pipMicToggle() {
+  const t = performance.now(); if (t - micToggleAt < 400) return; micToggleAt = t;
+  engine.resume(); earbudToggle();
+}
 function earbudToggle() {
   const talkable = S.rooms.filter((r) => r.talk && S.joined.has(r.id));
   const id = (S.active && talkable.find((r) => r.id === S.active)?.id) || talkable[0]?.id;
@@ -367,9 +398,11 @@ function ensureMic() {
 async function closeMic() { if (voice) { const v = voice; voice = null; await engine.stopCapture('voice'); setMeter(0); } }
 // Level meter in dB: -60 dBFS at the left edge to 0 dBFS at the right. The colour bands are fixed on the bar
 // (green, yellow from -30 dB, orange from -21 dB, red from -12 dB); the level only decides how much is lit.
+let micDb = -90;   // the latest microphone level in dBFS (the folded talk button shows it while you are live)
 function setMeter(l) {
   if (!ui.micMeter) return;
   const db = 20 * Math.log10(Math.max(Number.isFinite(l) ? l : 0, 1e-5));
+  micDb = db;
   ui.micMeter.update(db, db, performance.now());
 }
 
@@ -447,20 +480,23 @@ function feedCard(f) {
   const src = f.source ? h('button', { onclick: () => publishDialog(f) }, 'Send from this device') : null;
   const lvl = f.source ? h('div', { hidden: true }, h('div', { class: 'sub', style: 'margin-top:8px' }, 'Send level'),
     h('input', { type: 'range', min: 0, max: 2, step: 0.01, value: prefs.feedGain, oninput: (e) => { prefs.feedGain = +e.target.value; savePrefs(); engine.captures.get('feed')?.setGain(prefs.feedGain); } })) : null;
+  const fkey = 'f' + f.id, ffolded = () => !!prefs.fold[fkey];
+  const fchev = chevron(ffolded, () => setFold(prefs.fold, fkey, !ffolded()), ['Show details', 'Minimise']);
   const el = h('section', { class: 'card' },
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, f.name)),
-      live), volBox,
+      live, fchev), volBox,
     lvl, h('div', { class: 'row', style: 'margin-top:10px' }, play, src, n));
   cards.set('f' + f.id, () => {
     const p = S.presence.feeds?.[f.id] || {};
     live.textContent = p.live ? '● LIVE' : 'OFFLINE'; live.classList.toggle('live', !!p.live);
     n.textContent = `${p.n || 0} listening`;
     const on = S.listening.has(f.id);
-    fm.el.hidden = !on;
+    const fmin = ffolded(); fchev._sync(); el.classList.toggle('min', fmin);
+    fm.el.hidden = !on || fmin;
     play.textContent = on ? '■ Stop listening' : '▶ Listen';
     const sending = S.publishing === f.id;
-    volBox.hidden = sending; play.hidden = sending;
-    if (lvl) lvl.hidden = !sending;
+    volBox.hidden = sending || fmin; play.hidden = sending;
+    if (lvl) lvl.hidden = !sending || fmin;
     if (src) { src.textContent = S.publishing === f.id ? '■ Stop sending' : 'Send from this device'; src.classList.toggle('danger', S.publishing === f.id); }
   });
   if (S.listening.has(f.id)) setTimeout(() => applyVol('feed', f.id, prefs.feedVol[f.id] ?? 1), 0);
@@ -597,6 +633,9 @@ async function pipToggle() {
       v.muted = true; v.playsInline = true; v.disableRemotePlayback = true; v.controls = false; v.srcObject = stream;
       v.width = 480; v.height = 270;   // 16:9, the same shape as the picture, in case the browser sizes the window from the element
       v.style.cssText = 'position:fixed;left:0;bottom:0;width:32px;height:18px;opacity:0;pointer-events:none';
+      // The floating window's pause button may pause this video itself. That is the mic toggle, and the picture must keep
+      // running either way, so put the video straight back to playing.
+      v.addEventListener('pause', () => { if (!pip.on) return; pipMicToggle(); v.play().catch(() => {}); });
       v.addEventListener('enterpictureinpicture', () => pipOn(true));
       v.addEventListener('leavepictureinpicture', () => pipOn(false));
       v.addEventListener('webkitpresentationmodechanged', () => pipOn(v.webkitPresentationMode === 'picture-in-picture'));
@@ -661,7 +700,7 @@ function updateMediaSession() {
   navigator.mediaSession.playbackState = 'playing';
   const on = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
   // Earbud click arrives as play/pause: use it as a latch-talk toggle.
-  on('pause', earbudToggle); on('play', () => { engine.resume(); earbudToggle(); });
+  on('pause', pipMicToggle); on('play', pipMicToggle);
   // This is a live intercom, not a recording: no position, no scrubbing. Clearing these asks the phone to drop the
   // timeline bar from its media controls and from the floating window.
   try { navigator.mediaSession.setPositionState(); } catch {}
