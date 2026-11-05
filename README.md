@@ -4,6 +4,21 @@ A self-hosted intercom for crews, venues and events, with synchronised program a
 
 People talk to each other in **rooms** from any phone or computer. Everyone can also listen to a **program feed** (the show audio, a mix, a stream) that plays in sync on every device. The admin decides, person by person, who can hear and talk where.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" valign="top"><img src="docs/home.png" width="250" alt="Rooms with who is in each one, the current speaker highlighted, and level meters"><br><sub><b>Rooms.</b> Who is in each room, who is speaking, and a meter for what you hear</sub></td>
+    <td align="center" valign="top"><img src="docs/talking.png" width="250" alt="Talking to two rooms at once"><br><sub><b>Talking to two rooms at once.</b> Tap each room's button to latch it</sub></td>
+    <td align="center" valign="top"><img src="docs/folded.png" width="250" alt="Folded room cards and an open program feed"><br><sub><b>Folded cards.</b> Keep just the talk button, and see who is speaking at a glance</sub></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><img src="docs/floating.png" width="250" alt="The floating window"><br><sub><b>Floating window.</b> Who is talking, while you use other apps</sub></td>
+    <td align="center" valign="top"><img src="docs/admin-users.png" width="250" alt="Admin: the list of users and what each can reach"><br><sub><b>Admin.</b> A user for each person, and the rooms and feed each can reach</sub></td>
+    <td align="center" valign="top"><img src="docs/admin-access.png" width="250" alt="Admin: editing what one user can do"><br><sub><b>Access.</b> Tick who can listen, talk or send, per room and feed</sub></td>
+  </tr>
+</table>
+
 ## Highlights
 
 **Talking**
@@ -13,7 +28,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 - **Minimise what you do not need.** Every room and feed card has a chevron that folds it down to its essentials (the name, the join switch and the talk button, with who is here or speaking in the subtitle), and the participant list has its own chevron. Folded, the talk button shrinks and carries a small copy of the room meter. The choices are remembered on that device
 - The room meter shows the room as a whole: what you hear from others and your own voice while you are live, added together
 - Join several rooms at once and hear them mixed, with a volume slider per room
-- Headset or earbud button toggles your mic in the active room
+- The headset or earbud button flips your mic: it starts the active room, or ends your talk in every room you are live in
 - **Level meters** (with a white peak-hold line) on every room you have joined, on each program feed, and on the master listening volume. They show what you actually hear, after your volume sliders
 
 **Program feeds**
@@ -23,7 +38,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 
 **Made for phones**
 - Installable web app (PWA). Keeps playing with the screen off
-- A **floating window** (Picture-in-Picture, the `⧉ Float` button) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, highlighting speakers the same way as the room cards (including the 3-second tail), with "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter.. The app meters redraw on every screen refresh. The floating window draws its meter about 30 times a second, and slows itself to 10 on a phone that cannot keep up. A phone can only float video, so the status is drawn as a picture and updates only when something changes
+- A **floating window** (Picture-in-Picture, the `⧉` button in the top bar) shows who is talking while you use other apps. It lists the rooms you have joined, rooms with someone speaking first, with the same speaker highlight as the room cards, "+N more rooms" if they do not fit, a red "You are live" banner while your mic is open, and a listening-level meter. A phone can only float a video, so the status is drawn as a picture: it redraws when something changes, and the meter about 30 times a second (slowing to 10 on a phone that cannot keep up)
 - Keep screen on by default, plus a **Pocket lock** that blacks the screen out and ignores touches until you press and hold for three quarters of a second
 - Recovers by itself when you come back to the app (if the audio never stopped, for example while the floating window was open, it changes nothing, so there is no glitch): reconnects, wakes the sound engine and restarts the mic. There is also a Reload button in Settings
 - Plays on the phone's normal media volume, so there is one volume slider, not a separate "call" volume
@@ -66,7 +81,7 @@ docker compose up -d
 docker compose logs netspeak          # shows the first-start admin password
 ```
 
-Open the site through your reverse proxy, sign in as `admin`, and change the password in Settings. A fresh install has three starter rooms and a Program feed, open to every user, so new accounts work immediately.
+Open the site through your reverse proxy, sign in as `admin`, and use Admin, Users to set the admin password and create a user for each person. A fresh install has three starter rooms and a Program feed, open to every user, so new accounts work immediately.
 
 **Update:** `docker compose pull && docker compose up -d`. Your data in `./data` is kept.
 
@@ -127,7 +142,7 @@ All settings go in the `environment:` section of the compose file.
 - *Rooms*: name, colour and order; push-to-talk only; who can listen and talk. "Everyone" opens a room to all users
 - *Feeds*: who can listen and who can send, plus each feed's ingest key and ready-made ffmpeg commands
 
-**Talking.** Join a room with its switch. Tap the big button to latch your mic on, tap again to stop, or hold it for push-to-talk. Your microphone stays open while the app is open, which avoids the glitches phones make when a mic opens and closes, but nothing is sent until you talk.
+**Talking.** Join a room with its switch. Tap the big button to latch your mic on and tap again to stop, or hold it for push-to-talk. To reach several rooms at once, latch each of them; they all stay live until you tap them off. Your microphone stays open while the app is open, which avoids the glitches phones make when a mic opens and closes, but nothing is sent until you talk. Each room and feed card has a chevron that folds it down to its essentials, and the choice is remembered.
 
 **Listening.** On a first visit you join one room. After that the app remembers which rooms you switched on, and starts the program feed by itself. Each room and feed has its own volume.
 
@@ -159,6 +174,7 @@ Audio uses WebCodecs Opus: Chrome and Edge 94+, Firefox 130+, Safari 26+.
 - **iPhone:** iOS stops microphone capture when a web app goes to the background, and no web app can override that. Use the default Keep screen on and Pocket lock, and keep the app in front. Listening continues in the background
 - **Install:** use the browser's own menu (Install app, or Add to Home Screen). Installing needs trusted HTTPS
 - **Feedback:** if two devices are in one room, earbuds or a headset are the real fix
+- **Two devices, one account:** your own voice is never played to another device signed in as you, which stops them feeding back into each other. Give each device its own user if they need to hear each other
 
 ## Security
 
@@ -174,7 +190,7 @@ The frontend is plain ES modules in `web/`, embedded into the binary: there is n
 
 ```bash
 go test ./...                    # permissions, ordering, the server's stamp clock
-node test/syncplay.test.mjs      # synchronised playout across devices with different networks, clocks and noisy readings
+node test/syncplay.test.mjs      # synchronised playout across devices with different networks, clocks and noisy readings; recovery after a blip; pitch-preserving catch-up
 node test/feedback.test.js       # feedback suppressor, in a simulated howling loop
 node test/aec.test.js            # echo canceller, with real synthesised speech (needs ffmpeg with flite; skips if missing)
 ```
