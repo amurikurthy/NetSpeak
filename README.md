@@ -8,7 +8,7 @@ People talk to each other in **rooms** from any phone or computer. Everyone can 
 
 **Talking**
 - Rooms with tap-to-latch or hold-to-talk. Tap the button once and you stay live until you tap again; hold it for push-to-talk. A room can be set to push-to-talk only
-- Talking always goes to one room: starting in a second room moves you there
+- Talk to one room or several at once: tap the button in each room you want to reach (they all stay live until you tap them again), or hold a button to add that room only while you hold it. The headset button ends all of it
 - See who is in every room you have access to, whether or not you have joined it, and who is actually speaking right now. Speakers jump to the front of the list and light up, and stay lit for 3 seconds after they stop so a name does not flicker between words. Rooms you have no access to are not shown at all
 - **Minimise what you do not need.** Every room and feed card has a chevron that folds it down to its essentials (the name, the join switch and the talk button, with who is here or speaking in the subtitle), and the participant list has its own chevron. Folded, the talk button shrinks and carries a small copy of the room meter. The choices are remembered on that device
 - The room meter shows the room as a whole: what you hear from others and your own voice while you are live, added together

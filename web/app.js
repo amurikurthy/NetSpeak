@@ -363,10 +363,12 @@ function pipMicToggle() {
   engine.resume(); earbudToggle();
 }
 function earbudToggle() {
+  // Live in one or more rooms: the button ends all of it. Otherwise it starts talking in the active room.
+  if (S.talking.size) { for (const id of [...S.talking]) talkStop(id); toast('Mic off'); return; }
   const talkable = S.rooms.filter((r) => r.talk && S.joined.has(r.id));
   const id = (S.active && talkable.find((r) => r.id === S.active)?.id) || talkable[0]?.id;
   if (!id) return toast('Join a room first');
-  if (S.talking.has(id)) { talkStop(id); toast('Mic off'); } else { toggleCall(id); toast('Mic on'); }
+  toggleCall(id); toast('Mic on');
 }
 
 // ----- mic / talking -----
@@ -456,7 +458,6 @@ function setSpeaking(on) { vad.on = on; for (const id of S.talking) send({ t: 's
 
 async function talkStart(id) {
   await engine.start(); engine.resume();
-  for (const o of [...S.talking]) if (o !== id) talkStop(o);   // only ever transmit to one room
   S.talking.add(id); S.active = id; update();
   const v = await ensureMic();
   if (!v) { toast('Microphone unavailable: ' + micError); S.talking.delete(id); update(); return; }
