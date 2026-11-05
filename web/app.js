@@ -273,6 +273,14 @@ function chevron(isFolded, toggle, labels) {
 }
 const setFold = (obj, key, on) => { if (on) obj[key] = true; else delete obj[key]; savePrefs(); };
 
+// The room meter shows the room as a whole: what you hear from others and, while you are live in it, your own voice too
+// (the room never plays your voice back to you). Powers add, so two people at once read louder than either alone.
+const dbAdd = (a, b) => 10 * Math.log10(Math.pow(10, (Number.isFinite(a) ? a : -90) / 10) + Math.pow(10, (Number.isFinite(b) ? b : -90) / 10));
+function roomLevel(id) {
+  const heard = engine.level('room', id);
+  if (!S.talking.has(id)) return heard;
+  return { rms: dbAdd(heard.rms, micDb), peak: Math.max(Number.isFinite(heard.peak) ? heard.peak : -90, micDb) };
+}
 function roomCard(r) {
   const chips = h('div', { class: 'chips' });
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: prefs.roomVol[r.id] ?? 1,
@@ -282,10 +290,10 @@ function roomCard(r) {
     else { if (!prefs.left.includes(r.id)) prefs.left.push(r.id); if (S.talking.has(r.id)) talkStop(r.id); S.joined.delete(r.id); send({ t: 'leave', room: r.id }); engine.stopChannel('room', r.id); }
     persist(); update();
   } });
-  // Folded, the talk button gets smaller and carries its own meter: your voice while you are live, otherwise the room.
-  const bm = r.talk ? addMeter('b' + r.id, () => S.talking.has(r.id) ? { rms: micDb, peak: micDb } : engine.level('room', r.id)) : null;
+  // Folded, the talk button gets smaller and carries its own copy of the room meter.
+  const bm = r.talk ? addMeter('b' + r.id, () => roomLevel(r.id)) : null;
   const btn = r.talk ? talkButton(r, bm.el) : null;
-  const mt = addMeter('r' + r.id, () => engine.level('room', r.id));
+  const mt = addMeter('r' + r.id, () => roomLevel(r.id));
   const key = 'r' + r.id, folded = () => !!prefs.fold[key], peopleOff = () => !!prefs.peopleHidden[r.id];
   const subTxt = h('div', { class: 'sub' }, r.talk ? 'Listen & talk' : 'Listen only');
   const peopleBtn = chevron(peopleOff, () => setFold(prefs.peopleHidden, r.id, !peopleOff()), ['Show participants', 'Hide participants']);
